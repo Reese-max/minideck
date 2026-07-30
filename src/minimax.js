@@ -1,8 +1,29 @@
 import SYSTEM_DECK from "../prompts/system-deck.md";
+import CONSULTANT_DARK from "../prompts/styles/consultant-dark.md";
+import MINIMAL_LIGHT from "../prompts/styles/minimal-light.md";
+import PITCH_DECK from "../prompts/styles/pitch-deck.md";
+import TECH_VIVID from "../prompts/styles/tech-vivid.md";
 
 const TEXT_URL = "https://api.minimax.io/v1/chat/completions";
 const IMAGE_URL = "https://api.minimax.io/v1/image_generation";
 const encoder = new TextEncoder();
+const STYLE_PROMPTS = Object.freeze({
+  "consultant-dark": CONSULTANT_DARK,
+  "minimal-light": MINIMAL_LIGHT,
+  "pitch-deck": PITCH_DECK,
+  "tech-vivid": TECH_VIVID,
+});
+
+export const DEFAULT_STYLE = "consultant-dark";
+
+export function isDeckStyle(style) {
+  return Object.hasOwn(STYLE_PROMPTS, style);
+}
+
+export function buildSystemPrompt(style = DEFAULT_STYLE) {
+  if (!isDeckStyle(style)) throw new Error(`未知的簡報風格：${style}`);
+  return `${SYSTEM_DECK.trimEnd()}\n\n${STYLE_PROMPTS[style].trim()}`;
+}
 
 function sse(type, data) {
   return encoder.encode(`event: ${type}\ndata: ${JSON.stringify(data)}\n\n`);
@@ -74,7 +95,14 @@ async function readTextStream(body, onText) {
   return html;
 }
 
-export function streamDeck({ apiKey, messages, ctx, onComplete, onFailure }) {
+export function streamDeck({
+  apiKey,
+  messages,
+  style = DEFAULT_STYLE,
+  ctx,
+  onComplete,
+  onFailure,
+}) {
   const stream = new TransformStream();
   const writer = stream.writable.getWriter();
   let clientConnected = true;
@@ -102,7 +130,10 @@ export function streamDeck({ apiKey, messages, ctx, onComplete, onFailure }) {
           model: "MiniMax-M3",
           stream: true,
           thinking: { type: "disabled" },
-          messages: [{ role: "system", content: SYSTEM_DECK }, ...messages],
+          messages: [
+            { role: "system", content: buildSystemPrompt(style) },
+            ...messages,
+          ],
         }),
         signal: AbortSignal.timeout(240_000),
       });

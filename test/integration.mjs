@@ -79,12 +79,52 @@ const deck = await fetch(
 assert.equal(deck.status, 200);
 assert.equal(await deck.text(), fixture);
 
+const fixtureV2 = fixture.replace("第一頁", "新版第一頁");
+const saveDeckV2 = await fetch(`${BASE_URL}/api/projects/${projectId}/deck`, {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({ html: fixtureV2 }),
+});
+assert.equal(saveDeckV2.status, 200);
+assert.deepEqual(await saveDeckV2.json(), { version: 2 });
+
+const rollback = await fetch(
+  `${BASE_URL}/api/projects/${projectId}/rollback`,
+  {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ version: 1 }),
+  },
+);
+assert.equal(rollback.status, 200);
+assert.deepEqual(await rollback.json(), { version: 3 });
+const rolledBackDeck = await fetch(
+  `${BASE_URL}/api/projects/${projectId}/deck?version=3`,
+);
+assert.equal(rolledBackDeck.status, 200);
+assert.equal(await rolledBackDeck.text(), fixture);
+console.log("PASS rollback v1 -> v3，內容等於 v1");
+
+const missingRollback = await fetch(
+  `${BASE_URL}/api/projects/${projectId}/rollback`,
+  {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ version: 99 }),
+  },
+);
+assert.equal(missingRollback.status, 404);
+assert.deepEqual(await missingRollback.json(), { error: "找不到簡報版本" });
+console.log("PASS rollback v99 -> 404");
+
 const state = await fetch(`${BASE_URL}/api/projects/${projectId}`);
 assert.equal(state.status, 200);
 const project = await state.json();
 assert.equal(project.status, "ready");
 assert.deepEqual(project.versions.map(({ version, origin }) => ({ version, origin })), [
   { version: 1, origin: "imagefill" },
+  { version: 2, origin: "imagefill" },
+  { version: 3, origin: "rollback" },
 ]);
 assert.deepEqual(project.messages, []);
 console.log("PASS deck 儲存／讀取與專案狀態介面");

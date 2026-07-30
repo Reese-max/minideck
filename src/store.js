@@ -130,6 +130,21 @@ export async function readDeck(db, bucket, id, requestedVersion) {
   return { project, deck: object ? { ...row, object } : null };
 }
 
+export async function rollbackDeckVersion(db, bucket, id, sourceVersion) {
+  const source = await readDeck(db, bucket, id, sourceVersion);
+  if (!source.project) return { project: null, version: null };
+  if (!source.deck) return { project: source.project, version: null };
+
+  const version = await saveDeckVersion(
+    db,
+    bucket,
+    id,
+    source.deck.object.body,
+    "rollback",
+  );
+  return { project: source.project, version };
+}
+
 export async function readProjectState(db, id) {
   const project = await getProject(db, id);
   if (!project) return null;

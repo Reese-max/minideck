@@ -4,7 +4,13 @@ import {
   refund,
   verifyTurnstile,
 } from "./guard.js";
-import { generateImage, imageHash, streamDeck } from "./minimax.js";
+import {
+  DEFAULT_STYLE,
+  generateImage,
+  imageHash,
+  isDeckStyle,
+  streamDeck,
+} from "./minimax.js";
 import {
   assertD1Initialized,
   claimProject,
@@ -13,6 +19,7 @@ import {
   readProjectState,
   readQuotaCounts,
   releaseProject,
+  rollbackDeckVersion,
   saveDeckVersion,
 } from "./store.js";
 
@@ -35,9 +42,10 @@ function utcDay() {
   return new Date().toISOString().slice(0, 10).replaceAll("-", "");
 }
 
-async function requestJson(request) {
+async function requestJson(request, emptyValue = null) {
   try {
-    return await request.json();
+    const text = await request.text();
+    return text ? JSON.parse(text) : emptyValue;
   } catch {
     return null;
   }
@@ -205,7 +213,12 @@ async function settleTextFailure(env, id, day, error, reviseReserved) {
   return { message: publicTextError(error), refunded };
 }
 
-async function generateDeck(env, ctx, id) {
+async function generateDeck(request, env, ctx, id) {
+  const body = await requestJson(request, {});
+  if (!body) return json({ error: "請提供有效的 JSON 請求" }, 400);
+  const style = body.style === undefined ? DEFAULT_STYLE : body.style;
+  if (!isDeckStyle(style)) return json({ error: "簡報風格無效" }, 400);
+
   const claimed = await claimProject(env.DB, id);
   if (claimed === null) return json({ error: "專案不存在" }, 404);
   if (!claimed) return json({ error: "專案正在生成中" }, 409);
@@ -225,6 +238,7 @@ async function generateDeck(env, ctx, id) {
         content: `請依以下需求產生簡報：\n${project.brief}`,
       },
     ],
+    style,
     ctx,
     onComplete: async (html) => {
       const version = await saveDeckVersion(
@@ -238,6 +252,24 @@ async function generateDeck(env, ctx, id) {
     },
     onFailure: (error) => settleTextFailure(env, id, day, error, false),
   });
+}
+
+async function rollbackDeck(request, env, id) {
+  const body = await requestJson(request);
+  if (!body) return json({ error: "請提供有效的 JSON 請求" }, 400);
+  if (!Number.isInteger(body.version) || body.version < 1) {
+    return json({ error: "版本編號無效" }, 400);
+  }
+
+  const result = await rollbackDeckVersion(
+    env.DB,
+    env.BUCKET,
+    id,
+    body.version,
+  );
+  if (!result.project) return json({ error: "專案不存在" }, 404);
+  if (!result.version) return json({ error: "找不到簡報版本" }, 404);
+  return json({ version: result.version });
 }
 
 async function reviseDeck(request, env, ctx, id) {
@@ -453,12 +485,15 @@ export default {
       }
 
       const actionMatch = url.pathname.match(
-        /^\/api\/projects\/([^/]+)\/(generate|revise|image)$/,
+        /^\/api\/projects\/([^/]+)\/(generate|revise|image|rollback)$/,
       );
       if (actionMatch && request.method === "POST") {
         const [, id, action] = actionMatch;
-        if (action === "generate") return await generateDeck(env, ctx, id);
+        if (action === "generate") {
+          return await generateDeck(request, env, ctx, id);
+        }
         if (action === "revise") return await reviseDeck(request, env, ctx, id);
+        if (action === "rollback") return await rollbackDeck(request, env, id);
         return await generateProjectImage(request, env, id);
       }
 
