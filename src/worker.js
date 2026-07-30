@@ -225,6 +225,13 @@ async function generateDeck(request, env, ctx, id) {
   if (!body) return json({ error: "請提供有效的 JSON 請求" }, 400);
   const style = body.style === undefined ? DEFAULT_STYLE : body.style;
   if (!isDeckStyle(style)) return json({ error: "簡報風格無效" }, 400);
+  if (body.sourceData !== undefined && typeof body.sourceData !== "string") {
+    return json({ error: "參考資料格式無效" }, 400);
+  }
+  const sourceData = body.sourceData?.trim() ?? "";
+  if ([...sourceData].length > 3000) {
+    return json({ error: "參考資料不可超過 3000 字" }, 413);
+  }
 
   const claimed = await claimProject(env.DB, id);
   if (claimed === null) return json({ error: "專案不存在" }, 404);
@@ -246,6 +253,7 @@ async function generateDeck(request, env, ctx, id) {
       },
     ],
     style,
+    sourceData,
     ctx,
     onComplete: async (html) => {
       const version = await saveDeckVersion(

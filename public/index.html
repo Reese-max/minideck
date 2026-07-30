@@ -39,6 +39,11 @@
           <label class="sr-only" for="brief-input">簡報需求</label>
           <textarea id="brief-input" name="brief" maxlength="2000" placeholder="例如：為投資人做一份 B 輪募資簡報，聚焦 2026 上半年營收成長、產品線擴張與市場切入策略；語氣專業自信。"></textarea>
 
+          <label class="source-field" for="source-data">
+            <span>參考資料（選填，最多 3000 字）</span>
+            <textarea id="source-data" name="sourceData" maxlength="3000" placeholder="貼上可使用的事實與數據。未提供的數據會以「待補數據」虛線框標示。"></textarea>
+          </label>
+
           <div class="form-controls">
             <label class="field-label" for="page-count">
               <span>頁數</span>
@@ -123,10 +128,29 @@
         </div>
         <div class="export-actions">
           <button id="btn-optimize" class="outline-button" type="button" disabled><span aria-hidden="true">✦</span>一鍵優化</button>
+          <button id="btn-iterate" class="outline-button" type="button" disabled><span aria-hidden="true">↻</span>迭代優化</button>
           <button id="btn-html" class="outline-button" type="button"><span aria-hidden="true">〈 〉</span>HTML</button>
           <button id="btn-pdf" class="outline-button" type="button"><span aria-hidden="true">↓</span>PDF</button>
           <button id="btn-pptx" class="outline-button" type="button"><span aria-hidden="true">↓</span>PPTX</button>
           <button id="btn-share" class="outline-button" type="button"><span aria-hidden="true">↗</span>分享</button>
+        </div>
+      </section>
+
+      <section id="iterate-panel" class="panel iterate-panel" aria-labelledby="iterate-title" aria-live="polite">
+        <header>
+          <div>
+            <h2 id="iterate-title">迭代優化</h2>
+            <p class="iterate-status">尚未開始</p>
+          </div>
+          <strong class="iterate-quota">已用修訂額度 0 / 6</strong>
+        </header>
+        <div class="iterate-rounds"><p class="iterate-empty">每輪分數會顯示在這裡。</p></div>
+        <div class="iterate-controls">
+          <label for="iterate-steer">
+            <span>下一輪方向</span>
+            <input id="iterate-steer" type="text" maxlength="400" placeholder="例如：強化結論，保留所有既有數據" disabled>
+          </label>
+          <button id="btn-iterate-stop" class="outline-button" type="button" disabled>停止並回到最高分</button>
         </div>
       </section>
 

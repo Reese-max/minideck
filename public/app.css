@@ -213,7 +213,8 @@ a:focus-visible {
   font-size: 0.9rem;
 }
 
-#brief-input {
+#brief-input,
+#source-data {
   display: block;
   width: 100%;
   min-height: 178px;
@@ -228,14 +229,28 @@ a:focus-visible {
 }
 
 #brief-input::placeholder,
+#source-data::placeholder,
 #chat-input::placeholder {
   color: #686e7a;
 }
 
 #brief-input:focus,
+#source-data:focus,
 #chat-input:focus {
   border-color: rgb(77 163 232 / 68%);
   box-shadow: 0 0 0 3px rgb(77 163 232 / 10%);
+}
+
+.source-field {
+  display: grid;
+  gap: 7px;
+  margin-top: 16px;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+#source-data {
+  min-height: 104px;
 }
 
 .form-controls {
@@ -486,6 +501,85 @@ a:focus-visible {
 .outline-button span {
   margin-right: 7px;
   color: var(--secondary);
+}
+
+.iterate-panel {
+  overflow: hidden;
+}
+
+.iterate-panel > header,
+.iterate-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 15px 20px;
+}
+
+.iterate-panel > header {
+  border-bottom: 1px solid var(--border);
+}
+
+.iterate-panel h2,
+.iterate-panel p {
+  margin: 0;
+}
+
+.iterate-panel h2 {
+  font-size: 0.9rem;
+}
+
+.iterate-status,
+.iterate-quota,
+.iterate-empty {
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.iterate-rounds {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 9px;
+  padding: 14px 20px;
+}
+
+.iterate-round {
+  display: grid;
+  gap: 3px;
+  padding: 11px 13px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface-deep);
+}
+
+.iterate-round strong {
+  color: var(--secondary);
+  font-size: 0.8rem;
+}
+
+.iterate-round span {
+  color: var(--muted);
+  font-size: 0.7rem;
+}
+
+.iterate-controls {
+  border-top: 1px solid var(--border);
+}
+
+.iterate-controls label {
+  display: grid;
+  flex: 1 1 420px;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+#iterate-steer {
+  min-height: 38px;
+  padding: 0 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 9px;
+  background: var(--surface-deep);
 }
 
 .audit-report {
@@ -831,6 +925,11 @@ a:focus-visible {
   }
 
   .export-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .iterate-controls {
     align-items: stretch;
     flex-direction: column;
   }

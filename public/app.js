@@ -29,9 +29,13 @@
   async function apiError(response) {
     try {
       const payload = await response.json();
-      return new Error(payload.error || `請求失敗（HTTP ${response.status}）`);
+      const error = new Error(payload.error || `請求失敗（HTTP ${response.status}）`);
+      error.status = response.status;
+      return error;
     } catch {
-      return new Error(`請求失敗（HTTP ${response.status}）`);
+      const error = new Error(`請求失敗（HTTP ${response.status}）`);
+      error.status = response.status;
+      return error;
     }
   }
 
@@ -117,8 +121,12 @@
     createProject(brief, turnstileToken) {
       return jsonRequest("/api/projects", { brief, turnstileToken });
     },
-    generate(id, onToken, style = "consultant-dark") {
-      return streamAction(`/api/projects/${id}/generate`, { style }, onToken);
+    generate(id, onToken, style = "consultant-dark", sourceData = "") {
+      return streamAction(
+        `/api/projects/${id}/generate`,
+        { style, ...(sourceData ? { sourceData } : {}) },
+        onToken,
+      );
     },
     revise(id, message, onToken) {
       return streamAction(`/api/projects/${id}/revise`, { message }, onToken);
@@ -327,6 +335,78 @@
         "不要新增或清空圖片佔位符。",
       ].join("\n");
     },
+
+    buildIterationPrompt(report, steer = "") {
+      const issues = [...report.fails, ...report.warns];
+      const lines = [
+        "請依本輪稽核結果修訂完整 HTML；保留既有事實、數據、頁數與主旨，不得捏造數字。",
+        ...(steer ? [`使用者下一輪方向：${steer}`] : []),
+        ...issues.slice(0, 8).map((item) => `- ${item.detail}`),
+        ...(issues.length > 8 ? [`- 另有 ${issues.length - 8} 項同類問題，請一併處理。`] : []),
+        "不要新增或清空圖片佔位符。",
+      ];
+      return [...lines.join("\n")].slice(0, 1000).join("");
+    },
+  };
+
+  MD.iteration = {
+    score(report) {
+      return 100 - 20 * report.fails.length - 5 * report.warns.length;
+    },
+
+    async run({ maxRounds, step, rollback, shouldStop = () => false, onRound }) {
+      const rounds = [];
+      let cleanStreak = 0;
+      let reason = maxRounds > 0 ? "quota" : shouldStop() ? "user" : "quota";
+
+      while (rounds.length < maxRounds) {
+        if (shouldStop()) {
+          reason = "user";
+          break;
+        }
+        let result;
+        try {
+          result = await step({ round: rounds.length + 1, previous: rounds.at(-1) ?? null });
+        } catch (error) {
+          if (error?.status === 429) {
+            reason = "quota";
+            break;
+          }
+          throw error;
+        }
+        const entry = {
+          round: rounds.length + 1,
+          version: result.version,
+          report: result.report,
+          score: MD.iteration.score(result.report),
+        };
+        rounds.push(entry);
+        await onRound?.(entry);
+        cleanStreak = entry.report.fails.length || entry.report.warns.length
+          ? 0
+          : cleanStreak + 1;
+        if (cleanStreak >= 2) {
+          reason = "clean";
+          break;
+        }
+        if (shouldStop()) {
+          reason = "user";
+          break;
+        }
+      }
+
+      const best = rounds.reduce(
+        (winner, entry) => (!winner || entry.score >= winner.score ? entry : winner),
+        null,
+      );
+      const rollbackResult = best ? await rollback(best.version) : null;
+      return {
+        rounds,
+        best,
+        reason,
+        rollbackVersion: rollbackResult?.version ?? null,
+      };
+    },
   };
 
   if (typeof document === "undefined") return;
@@ -336,6 +416,10 @@
   const submitButton = form.querySelector('button[type="submit"]');
   const frame = document.querySelector("#deck-frame");
   const optimizeButton = document.querySelector("#btn-optimize");
+  const iterateButton = document.querySelector("#btn-iterate");
+  const iterateStopButton = document.querySelector("#btn-iterate-stop");
+  const iterateSteerInput = document.querySelector("#iterate-steer");
+  const iteratePanel = document.querySelector("#iterate-panel");
   const htmlButton = document.querySelector("#btn-html");
   const pdfButton = document.querySelector("#btn-pdf");
   const pptxButton = document.querySelector("#btn-pptx");
@@ -359,6 +443,8 @@
   let currentAudit = null;
   let currentProjectId = "";
   let currentDeckVersion = 0;
+  let iterationRunning = false;
+  let iterationStopRequested = false;
 
   function setStage(name, stageState, detail) {
     const card = document.querySelector(`[data-stage="${name}"]`);
@@ -374,6 +460,9 @@
     busy = value;
     submitButton.disabled = busy || !turnstileToken;
     optimizeButton.disabled = busy || !currentProjectId || !currentAudit;
+    iterateButton.disabled = busy || !currentProjectId || !currentAudit;
+    iterateStopButton.disabled = !iterationRunning;
+    iterateSteerInput.disabled = !currentProjectId || (busy && !iterationRunning);
     downloadButtons.forEach((button) => {
       button.disabled = busy || !currentProjectId || !currentDeckVersion;
     });
@@ -531,6 +620,7 @@
   async function refreshVersions(id) {
     const project = await MD.api.getProject(id);
     renderVersions(id, project.versions);
+    iteratePanel.querySelector(".iterate-quota").textContent = `已用修訂額度 ${reviseQuotaUsed(project)} / 6`;
     return project;
   }
 
@@ -753,6 +843,31 @@ html,body{margin:0!important;padding:0!important;background:#fff!important}
     );
   }
 
+  function reviseQuotaUsed(project) {
+    return project.messages.filter((message) => message.role === "user").length;
+  }
+
+  function resetIterationPanel() {
+    iteratePanel.querySelector(".iterate-status").textContent = "尚未開始";
+    iteratePanel.querySelector(".iterate-quota").textContent = "已用修訂額度 0 / 6";
+    iteratePanel.querySelector(".iterate-rounds").innerHTML =
+      '<p class="iterate-empty">每輪分數會顯示在這裡。</p>';
+  }
+
+  function renderIterationRound(entry, used) {
+    const rows = iteratePanel.querySelector(".iterate-rounds");
+    rows.querySelector(".iterate-empty")?.remove();
+    const row = document.createElement("div");
+    row.className = "iterate-round";
+    const score = document.createElement("strong");
+    score.textContent = `第 ${entry.round} 輪 · ${entry.score} 分`;
+    const detail = document.createElement("span");
+    detail.textContent = `v${entry.version} · ${entry.report.fails.length} FAIL / ${entry.report.warns.length} WARN`;
+    row.append(score, detail);
+    rows.append(row);
+    iteratePanel.querySelector(".iterate-quota").textContent = `已用修訂額度 ${used} / 6`;
+  }
+
   async function auditAndFix(id, allowAutoRevise = true) {
     currentProjectId = id;
     optimizeButton.disabled = true;
@@ -828,11 +943,16 @@ html,body{margin:0!important;padding:0!important;background:#fff!important}
     return report;
   }
 
-  async function generateAndFill(id, style) {
+  async function generateAndFill(id, style, sourceData) {
     let tokenChars = 0;
     let sawToken = false;
     setStage("generate", "active", "等待 MiniMax 串流⋯");
-    console.log("MD generate_start", `project=${id}`, `style=${style}`);
+    console.log(
+      "MD generate_start",
+      `project=${id}`,
+      `style=${style}`,
+      `source_chars=${[...sourceData].length}`,
+    );
     const generated = await MD.api.generate(
       id,
       (text) => {
@@ -844,6 +964,7 @@ html,body{margin:0!important;padding:0!important;background:#fff!important}
         }
       },
       style,
+      sourceData,
     );
     setStage("generate", "done", `串流完成，產生 v${generated.version}`);
     console.log("MD generate_done", `project=${id}`, `version=${generated.version}`);
@@ -906,6 +1027,10 @@ html,body{margin:0!important;padding:0!important;background:#fff!important}
     currentAudit = null;
     currentProjectId = "";
     currentDeckVersion = 0;
+    iterationRunning = false;
+    iterationStopRequested = false;
+    resetIterationPanel();
+    iterateSteerInput.value = "";
     submitButton.disabled = true;
   }
 
@@ -984,6 +1109,114 @@ html,body{margin:0!important;padding:0!important;background:#fff!important}
     }
   });
 
+  iterateStopButton.addEventListener("click", () => {
+    if (!iterationRunning) return;
+    iterationStopRequested = true;
+    iterateStopButton.disabled = true;
+    iterateSteerInput.disabled = true;
+    iteratePanel.querySelector(".iterate-status").textContent = "本輪完成後停止並回到最高分版本⋯";
+    console.log("MD iterate_stop_requested", `project=${currentProjectId}`);
+  });
+
+  iterateButton.addEventListener("click", async () => {
+    if (busy || !currentProjectId || !currentAudit) return;
+    const id = currentProjectId;
+    iterationRunning = true;
+    iterationStopRequested = false;
+    resetIterationPanel();
+    setBusy(true);
+    try {
+      const project = await MD.api.getProject(id);
+      let quotaUsed = reviseQuotaUsed(project);
+      iteratePanel.querySelector(".iterate-quota").textContent = `已用修訂額度 ${quotaUsed} / 6`;
+      iteratePanel.querySelector(".iterate-status").textContent = "迭代進行中⋯";
+      const result = await MD.iteration.run({
+        maxRounds: Math.max(0, 6 - quotaUsed),
+        shouldStop: () => iterationStopRequested,
+        step: async ({ round, previous }) => {
+          const steer = iterateSteerInput.value.trim();
+          iterateSteerInput.value = "";
+          const prompt = MD.audit.buildIterationPrompt(previous?.report ?? currentAudit, steer);
+          console.log(
+            "MD iterate_round_start",
+            `project=${id}`,
+            `round=${round}`,
+            `steer_chars=${[...steer].length}`,
+          );
+          setStage("revise", "active", `迭代第 ${round} 輪修訂中⋯`);
+          const revised = await MD.api.revise(id, prompt);
+          console.log(
+            "MD iterate_revise_done",
+            `project=${id}`,
+            `round=${round}`,
+            `version=${revised.version}`,
+          );
+          const html = await fetchDeck(id, revised.version);
+          const saved = await fillAndSave(id, html);
+          setStage("audit", "active", `量測迭代第 ${round} 輪⋯`);
+          const report = MD.audit.run(frame.contentDocument);
+          logAudit(`iterate_${round}`, report);
+          renderAudit(report);
+          quotaUsed += 1;
+          console.log(
+            "MD iterate_round_score",
+            `project=${id}`,
+            `round=${round}`,
+            `version=${saved.version}`,
+            `score=${MD.iteration.score(report)}`,
+            `fails=${report.fails.length}`,
+            `warns=${report.warns.length}`,
+            `quota=${quotaUsed}/6`,
+          );
+          return { version: saved.version, report };
+        },
+        onRound: (entry) => renderIterationRound(entry, quotaUsed),
+        rollback: async (version) => {
+          const rolledBack = await MD.api.rollback(id, version);
+          console.log(
+            "MD iterate_rollback",
+            `project=${id}`,
+            `source=${version}`,
+            `version=${rolledBack.version}`,
+          );
+          return rolledBack;
+        },
+      });
+
+      if (result.rollbackVersion) {
+        await refreshVersions(id);
+        await loadPreview(id, result.rollbackVersion);
+        const report = MD.audit.run(frame.contentDocument);
+        renderAudit(report);
+        setStage("audit", "done", `最高分版本：${report.fails.length} FAIL / ${report.warns.length} WARN`);
+      }
+      const reason = {
+        user: "使用者已停止",
+        quota: "修訂額度已用罄",
+        clean: "連續兩輪 0 FAIL / 0 WARN",
+      }[result.reason];
+      iteratePanel.querySelector(".iterate-status").textContent = result.best
+        ? `${reason}；最高 ${result.best.score} 分（v${result.best.version}），已回滾為 v${result.rollbackVersion}`
+        : `${reason}；尚無可回滾的迭代版本`;
+      console.log(
+        "MD iterate_complete",
+        `project=${id}`,
+        `reason=${result.reason}`,
+        `rounds=${result.rounds.length}`,
+        `best_score=${result.best?.score ?? "none"}`,
+        `best_version=${result.best?.version ?? "none"}`,
+        `rollback_version=${result.rollbackVersion ?? "none"}`,
+        `quota=${quotaUsed}/6`,
+      );
+    } catch (error) {
+      showError(error);
+    } finally {
+      iterationRunning = false;
+      iterationStopRequested = false;
+      setBusy(false);
+    }
+  });
+
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     if (busy) return;
@@ -995,6 +1228,7 @@ html,body{margin:0!important;padding:0!important;background:#fff!important}
     const brief = document.querySelector("#brief-input").value.trim();
     const pages = document.querySelector("#page-count").value;
     const style = document.querySelector("#style-select").value;
+    const sourceData = document.querySelector("#source-data").value.trim();
     const fullBrief = `${brief}\n\n請產生 ${pages} 頁。`;
     if ([...fullBrief].length > 2000) {
       showError(new Error("簡報需求加上頁數後不可超過 2000 字"));
@@ -1009,7 +1243,7 @@ html,body{margin:0!important;padding:0!important;background:#fff!important}
       history.replaceState(null, "", `#p=${id}`);
       console.log("MD project_created", `project=${id}`);
       await refreshQuota();
-      await generateAndFill(id, style);
+      await generateAndFill(id, style, sourceData);
     } catch (error) {
       showError(error);
     } finally {

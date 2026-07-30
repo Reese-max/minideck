@@ -41,6 +41,18 @@ for (let attempt = 1; attempt <= 3; attempt += 1) {
   if (attempt === 1) console.log(`PASS 測試 token -> 200，id=${id}`);
 }
 
+const oversizedSourceData = await fetch(
+  `${BASE_URL}/api/projects/${projectId}/generate`,
+  {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ sourceData: "資".repeat(3001) }),
+  },
+);
+assert.equal(oversizedSourceData.status, 413);
+assert.deepEqual(await oversizedSourceData.json(), { error: "參考資料不可超過 3000 字" });
+console.log("PASS sourceData 超過 3000 字 -> 413，未呼叫 MiniMax");
+
 const beforeLimit = await quota();
 assert.equal(beforeLimit.ipRemaining.projects, 0);
 
