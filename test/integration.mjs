@@ -83,7 +83,7 @@ const fixtureV2 = fixture.replace("第一頁", "新版第一頁");
 const saveDeckV2 = await fetch(`${BASE_URL}/api/projects/${projectId}/deck`, {
   method: "POST",
   headers: { "content-type": "application/json" },
-  body: JSON.stringify({ html: fixtureV2 }),
+  body: JSON.stringify({ html: fixtureV2, origin: "mechfix" }),
 });
 assert.equal(saveDeckV2.status, 200);
 assert.deepEqual(await saveDeckV2.json(), { version: 2 });
@@ -123,7 +123,7 @@ const project = await state.json();
 assert.equal(project.status, "ready");
 assert.deepEqual(project.versions.map(({ version, origin }) => ({ version, origin })), [
   { version: 1, origin: "imagefill" },
-  { version: 2, origin: "imagefill" },
+  { version: 2, origin: "mechfix" },
   { version: 3, origin: "rollback" },
 ]);
 assert.deepEqual(project.messages, []);

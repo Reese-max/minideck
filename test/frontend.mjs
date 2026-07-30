@@ -33,4 +33,13 @@ assert.deepEqual(progress, ["1/2", "2/2"]);
 assert.match(filled, /data-gen-prompt="First &amp; detailed"[^>]+src="\/img\/1\.jpg"/);
 assert.match(filled, /data-gen-prompt='Already filled' src='\/img\/existing\.jpg'/);
 assert.match(filled, /data-gen-prompt="Second"[^>]+src="\/img\/2\.jpg"/);
+
+const optimizePrompt = globalThis.MD.audit.buildOptimizePrompt({
+  fails: [],
+  warns: [{ slide: 3, type: "numbers", detail: "第3頁：獨立數字 7 個超過 6 個" }],
+});
+assert.match(optimizePrompt, /目前稽核 WARN 清單/);
+assert.match(optimizePrompt, /第3頁：獨立數字 7 個超過 6 個/);
+assert.match(optimizePrompt, /強化視覺層級與留白平衡，維持所有內容不變/);
+console.log("TASK_6_OPTIMIZE_PROMPT_PASS");
 console.log("TASK_5_FRONTEND_PIPELINE_PASS");

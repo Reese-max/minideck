@@ -562,6 +562,9 @@ a:focus-visible {
 .audit-warn strong { color: var(--warning); }
 .audit-pass strong { color: var(--success); }
 
+.audit-report.has-fails summary i { background: var(--danger); }
+.audit-report.has-warns summary i { background: var(--warning); }
+
 .chat-panel {
   position: sticky;
   top: 98px;

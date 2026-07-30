@@ -126,8 +126,8 @@
     image(id, prompt, ar) {
       return jsonRequest(`/api/projects/${id}/image`, { prompt, ar });
     },
-    saveDeck(id, html) {
-      return jsonRequest(`/api/projects/${id}/deck`, { html });
+    saveDeck(id, html, origin = "imagefill") {
+      return jsonRequest(`/api/projects/${id}/deck`, { html, origin });
     },
     async getProject(id) {
       const response = await fetch(`/api/projects/${id}`, { cache: "no-store" });
@@ -176,11 +176,165 @@
     },
   };
 
+  const CHROME_SELECTOR =
+    '.kicker, .topline, .footline, .footer, .mark, .page, .pagenum, .badge, .tag, [class*="footnote"], [class*="page-num"], header, footer';
+
+  function withoutPreviewStyle(doc, action) {
+    const previewStyle = doc.querySelector("#md-preview-style");
+    const previousMedia = previewStyle?.getAttribute("media");
+    previewStyle?.setAttribute("media", "not all");
+    try {
+      return action();
+    } finally {
+      if (previewStyle) {
+        if (previousMedia === null) previewStyle.removeAttribute("media");
+        else previewStyle.setAttribute("media", previousMedia);
+      }
+    }
+  }
+
+  function measureSlides(doc) {
+    return withoutPreviewStyle(doc, () =>
+      [...doc.querySelectorAll("section.slide, .slide")].map((slide, index) => {
+        const walker = doc.createTreeWalker(slide, NodeFilter.SHOW_TEXT);
+        const items = [];
+        let node;
+        while ((node = walker.nextNode())) {
+          const text = node.textContent.trim();
+          if (!text) continue;
+          const element = node.parentElement;
+          const style = doc.defaultView.getComputedStyle(element);
+          if (
+            style.display === "none" ||
+            style.visibility === "hidden" ||
+            Number(style.opacity) === 0
+          ) {
+            continue;
+          }
+          const rect = element.getBoundingClientRect();
+          if (rect.width === 0 || rect.height === 0) continue;
+
+          let px = Number.parseFloat(style.fontSize);
+          if (element.ownerSVGElement) {
+            const svg = element.ownerSVGElement;
+            const viewBox = svg.viewBox?.baseVal;
+            const svgRect = svg.getBoundingClientRect();
+            if (viewBox?.height > 0) px *= svgRect.height / viewBox.height;
+          }
+          items.push({
+            element,
+            text: text.slice(0, 40),
+            px: Math.round(px * 10) / 10,
+            length: text.length,
+            chrome: Boolean(element.closest(CHROME_SELECTOR)),
+          });
+        }
+        return { slide: index + 1, items };
+      }),
+    );
+  }
+
+  function issue(slide, type, detail) {
+    return { slide, type, detail: `第${slide}頁：${detail}` };
+  }
+
+  MD.audit = {
+    run(iframeDocument) {
+      const fails = [];
+      const warns = [];
+      for (const { slide, items } of measureSlides(iframeDocument)) {
+        const isSource = (text) => /^(?:來源|出處|source:)/i.test(text);
+        const smallish = [];
+        const bodyChars = items
+          .filter((item) => !isSource(item.text))
+          .reduce((sum, item) => sum + item.length, 0);
+        const numbers = new Set();
+        for (const item of items) {
+          for (const match of item.text.matchAll(/\d+(?:[.,]\d+)?%?/g)) {
+            numbers.add(match[0]);
+          }
+          if (item.px < 13) {
+            fails.push(
+              issue(slide, "font-min", `可見文字字級 ${item.px}px 低於 13px 底線：「${item.text}」`),
+            );
+          } else if (
+            item.px < 17 &&
+            !isSource(item.text) &&
+            !item.chrome
+          ) {
+            smallish.push(item);
+          }
+        }
+        warns.push(
+          ...smallish
+            .slice(0, 5)
+            .map((item) =>
+              issue(
+                slide,
+                "font-min",
+                `內文字級 ${item.px}px 落在 13–16px 警示區間：「${item.text}」`,
+              ),
+            ),
+        );
+        if (bodyChars > 620) {
+          fails.push(issue(slide, "density", `文字密度 ${bodyChars} 字超過 620 字`));
+        } else if (bodyChars > 450) {
+          warns.push(issue(slide, "density", `文字密度 ${bodyChars} 字偏高`));
+        }
+        if (numbers.size > 6) {
+          warns.push(
+            issue(slide, "numbers", `獨立數字 ${numbers.size} 個超過 6 個，可能資訊過載`),
+          );
+        }
+      }
+      return { fails, warns };
+    },
+
+    fixMechanical(iframeDocument) {
+      const changed = new Set();
+      for (const { items } of measureSlides(iframeDocument)) {
+        for (const item of items) {
+          if (item.px < 13 && !changed.has(item.element)) {
+            item.element.style.setProperty("font-size", "16px", "important");
+            changed.add(item.element);
+          }
+        }
+      }
+      return { changed: changed.size, floor: 13, target: 16 };
+    },
+
+    buildRevisePrompt(report) {
+      const issues = [
+        ...report.fails.filter((item) => item.type === "density"),
+        ...report.warns.filter((item) => item.type === "numbers"),
+      ];
+      return [
+        "請修正以下簡報稽核問題；保留既有事實、數據與主旨，不要新增投影片：",
+        ...issues.map((item) => `- ${item.detail}`),
+        "請以重排、分組與精簡重複措辭降低密度及數字過載，不要新增或清空圖片佔位符。",
+      ].join("\n");
+    },
+
+    buildOptimizePrompt(report) {
+      return [
+        "目前稽核 WARN 清單：",
+        ...(report.warns.length
+          ? report.warns.map((item) => `- ${item.detail}`)
+          : ["- 無 WARN"]),
+        "",
+        "強化視覺層級與留白平衡，維持所有內容不變",
+        "不要新增或清空圖片佔位符。",
+      ].join("\n");
+    },
+  };
+
   if (typeof document === "undefined") return;
 
   const form = document.querySelector("#brief-form");
+  if (!form) return;
   const submitButton = form.querySelector('button[type="submit"]');
   const frame = document.querySelector("#deck-frame");
+  const optimizeButton = document.querySelector("#btn-optimize");
   const versionList = document.querySelector("#version-list");
   const previewVersion = document.querySelector("[data-preview-version]");
   const turnstileBox = document.querySelector("#cf-turnstile");
@@ -189,12 +343,15 @@
   const originLabels = {
     generate: "生成",
     imagefill: "填圖",
+    mechfix: "機械修正",
     revise: "修訂",
     rollback: "回滾",
   };
   let turnstileToken = "";
   let turnstileWidget;
   let busy = false;
+  let currentAudit = null;
+  let currentProjectId = "";
 
   function setStage(name, stageState, detail) {
     const card = document.querySelector(`[data-stage="${name}"]`);
@@ -209,6 +366,7 @@
   function setBusy(value) {
     busy = value;
     submitButton.disabled = busy || !turnstileToken;
+    optimizeButton.disabled = busy || !currentProjectId || !currentAudit;
     form.setAttribute("aria-busy", String(busy));
   }
 
@@ -344,6 +502,8 @@
           const project = await MD.api.getProject(id);
           renderVersions(id, project.versions);
           await loadPreview(id, result.version);
+          currentProjectId = id;
+          await auditAndFix(id, false);
         } catch (error) {
           showError(error);
           versionList.querySelectorAll("button").forEach((target) => {
@@ -382,6 +542,132 @@
     return saved;
   }
 
+  function serializeDeck(doc) {
+    const root = doc.documentElement.cloneNode(true);
+    root.querySelector("#md-preview-style")?.remove();
+    return `<!doctype html>\n${root.outerHTML}`;
+  }
+
+  function renderAudit(report) {
+    const reportBox = document.querySelector("#audit-report");
+    const list = reportBox.querySelector(".audit-list");
+    const total = report.fails.length + report.warns.length;
+    reportBox.classList.toggle("has-fails", report.fails.length > 0);
+    reportBox.classList.toggle(
+      "has-warns",
+      report.fails.length === 0 && report.warns.length > 0,
+    );
+    reportBox.querySelector(".audit-summary").textContent = report.fails.length
+      ? `${report.fails.length} FAIL / ${report.warns.length} WARN`
+      : report.warns.length
+        ? `0 FAIL / ${report.warns.length} WARN`
+        : "PASS";
+    list.replaceChildren();
+
+    const rows = total
+      ? [
+          ...report.fails.map((item) => ["FAIL", "audit-fail", item.detail]),
+          ...report.warns.map((item) => ["WARN", "audit-warn", item.detail]),
+        ]
+      : [["PASS", "audit-pass", "所有投影片均通過目前稽核判準。"]];
+    for (const [label, className, detail] of rows) {
+      const row = document.createElement("div");
+      row.className = `audit-item ${className}`;
+      const strong = document.createElement("strong");
+      strong.textContent = label;
+      const text = document.createElement("span");
+      text.textContent = detail;
+      row.append(strong, text);
+      list.append(row);
+    }
+    reportBox.open = report.fails.length > 0;
+    currentAudit = report;
+  }
+
+  function logAudit(phase, report) {
+    console.log(
+      "MD audit_result",
+      `phase=${phase}`,
+      `fails=${report.fails.length}`,
+      `warns=${report.warns.length}`,
+    );
+  }
+
+  async function auditAndFix(id, allowAutoRevise = true) {
+    currentProjectId = id;
+    optimizeButton.disabled = true;
+    setStage("audit", "active", "量測所有投影片⋯");
+    let report = MD.audit.run(frame.contentDocument);
+    logAudit("initial", report);
+
+    if (report.fails.some((item) => item.type === "font-min")) {
+      const fixed = MD.audit.fixMechanical(frame.contentDocument);
+      console.log(
+        "MD mechfix_apply",
+        `project=${id}`,
+        `elements=${fixed.changed}`,
+        `floor=${fixed.floor}px`,
+        `target=${fixed.target}px`,
+      );
+      if (fixed.changed) {
+        const saved = await MD.api.saveDeck(
+          id,
+          serializeDeck(frame.contentDocument),
+          "mechfix",
+        );
+        console.log("MD mechfix_saved", `project=${id}`, `version=${saved.version}`);
+        await loadPreview(id, saved.version);
+        await refreshVersions(id);
+        report = MD.audit.run(frame.contentDocument);
+        logAudit("after_mechfix", report);
+      }
+    }
+
+    renderAudit(report);
+    const reviseIssues = [
+      ...report.fails.filter((item) => item.type === "density"),
+      ...report.warns.filter((item) => item.type === "numbers"),
+    ];
+    const autoFixKey = `md-auto-revise:${id}`;
+    if (
+      allowAutoRevise &&
+      reviseIssues.length &&
+      sessionStorage.getItem(autoFixKey) !== "attempted"
+    ) {
+      sessionStorage.setItem(autoFixKey, "attempted");
+      const prompt = MD.audit.buildRevisePrompt(report);
+      setStage("revise", "active", `修正 ${reviseIssues.length} 項密度／數字問題⋯`);
+      console.log("MD auto_revise_start", `project=${id}`, `issues=${reviseIssues.length}`);
+      const revised = await MD.api.revise(id, prompt);
+      console.log("MD auto_revise_done", `project=${id}`, `version=${revised.version}`);
+      const html = await fetchDeck(id, revised.version);
+      await fillAndSave(id, html);
+      report = MD.audit.run(frame.contentDocument);
+      logAudit("after_revise", report);
+      renderAudit(report);
+      setStage("revise", "done", `已完成一次自動修訂；最終仍有 ${report.fails.length} FAIL`);
+    } else {
+      setStage(
+        "revise",
+        "done",
+        reviseIssues.length ? "已停止自動修訂，請查看剩餘清單" : "不需使用修訂額度",
+      );
+    }
+    setStage(
+      "audit",
+      "done",
+      `最終 ${report.fails.length} FAIL / ${report.warns.length} WARN`,
+    );
+    console.log(
+      "MD audit_final",
+      `project=${id}`,
+      `fails=${report.fails.length}`,
+      `warns=${report.warns.length}`,
+    );
+    optimizeButton.disabled = busy || !currentProjectId;
+    return report;
+  }
+
   async function generateAndFill(id, style) {
     let tokenChars = 0;
     let sawToken = false;
@@ -403,6 +689,7 @@
     console.log("MD generate_done", `project=${id}`, `version=${generated.version}`);
     const html = await fetchDeck(id, generated.version);
     await fillAndSave(id, html);
+    await auditAndFix(id);
   }
 
   function showError(error) {
@@ -416,6 +703,7 @@
   async function resume() {
     const id = new URLSearchParams(location.hash.slice(1)).get("p");
     if (!id) return;
+    currentProjectId = id;
     console.log("MD resume_start", `project=${id}`);
     const project = await refreshVersions(id);
     if (!project.versions.length) {
@@ -439,6 +727,7 @@
       setStage("images", "done", "圖片已完整填入");
       await loadPreview(id, latest);
     }
+    await auditAndFix(id);
   }
 
   function resetShell() {
@@ -454,8 +743,34 @@
     document.querySelectorAll("#export-buttons button").forEach((button) => {
       button.disabled = true;
     });
+    currentAudit = null;
+    currentProjectId = "";
     submitButton.disabled = true;
   }
+
+  optimizeButton.addEventListener("click", async () => {
+    if (busy || !currentProjectId || !currentAudit) return;
+    setBusy(true);
+    try {
+      const prompt = MD.audit.buildOptimizePrompt(currentAudit);
+      console.log("MD optimize_start", `project=${currentProjectId}`);
+      console.log("MD optimize_prompt", prompt.replaceAll("\n", " | "));
+      setStage("revise", "active", "依 WARN 清單進行一鍵優化⋯");
+      const revised = await MD.api.revise(currentProjectId, prompt);
+      console.log(
+        "MD optimize_revise_done",
+        `project=${currentProjectId}`,
+        `version=${revised.version}`,
+      );
+      const html = await fetchDeck(currentProjectId, revised.version);
+      await fillAndSave(currentProjectId, html);
+      await auditAndFix(currentProjectId, false);
+    } catch (error) {
+      showError(error);
+    } finally {
+      setBusy(false);
+    }
+  });
 
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -478,6 +793,7 @@
     stageNames.forEach((name) => setStage(name, "idle", "等待中"));
     try {
       const { id } = await MD.api.createProject(fullBrief, turnstileToken);
+      currentProjectId = id;
       history.replaceState(null, "", `#p=${id}`);
       console.log("MD project_created", `project=${id}`);
       await refreshQuota();

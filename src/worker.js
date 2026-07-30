@@ -428,7 +428,7 @@ async function saveDeck(request, env, id) {
     env.BUCKET,
     id,
     body.html,
-    "imagefill",
+    typeof body.origin === "string" && body.origin ? body.origin : "imagefill",
   );
   return json({ version });
 }

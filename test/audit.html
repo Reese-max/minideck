@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head>
+  <meta charset="utf-8">
+  <title>MiniDeck 稽核測試</title>
+  <style>
+    body { margin: 24px; background: #101218; color: #f4f4f4; font: 16px/1.5 monospace; }
+    iframe { position: fixed; left: -10000px; width: 1920px; height: 1080px; border: 0; }
+    pre { padding: 16px; overflow: auto; border: 1px solid #444; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <h1>MiniDeck 稽核 fixture</h1>
+  <p id="status">執行中⋯</p>
+  <pre id="result"></pre>
+  <iframe title="違規簡報" src="fixtures/bad-deck.html"></iframe>
+  <script src="../public/app.js"></script>
+  <script>
+    document.querySelector("iframe").addEventListener("load", (event) => {
+      const doc = event.currentTarget.contentDocument;
+      const before = MD.audit.run(doc);
+      const types = new Set([...before.fails, ...before.warns].map((item) => item.type));
+      const fix = MD.audit.fixMechanical(doc);
+      const after = MD.audit.run(doc);
+      const fontFailsAfter = after.fails.filter((item) => item.type === "font-min");
+      const pass =
+        ["font-min", "density", "numbers"].every((type) => types.has(type)) &&
+        before.fails.some((item) => item.type === "font-min") &&
+        fontFailsAfter.length === 0 &&
+        fix.changed > 0;
+      const evidence = {
+        pass,
+        detectedTypes: [...types],
+        before,
+        mechanical: fix,
+        after,
+        fontFailsBefore: before.fails.filter((item) => item.type === "font-min").length,
+        fontFailsAfter: fontFailsAfter.length,
+      };
+      globalThis.auditEvidence = evidence;
+      document.body.dataset.result = pass ? "pass" : "fail";
+      document.querySelector("#status").textContent = pass ? "PASS" : "FAIL";
+      document.querySelector("#result").textContent = JSON.stringify(evidence, null, 2);
+      console.log("AUDIT_FIXTURE_BEFORE", JSON.stringify({
+        fails: before.fails.length,
+        warns: before.warns.length,
+        types: [...types],
+        fontFails: evidence.fontFailsBefore,
+      }));
+      console.log("AUDIT_FIXTURE_AFTER", JSON.stringify({
+        fails: after.fails.length,
+        warns: after.warns.length,
+        fontFails: evidence.fontFailsAfter,
+        changed: fix.changed,
+      }));
+      if (!pass) console.error("AUDIT_FIXTURE_FAIL", JSON.stringify(evidence));
+    }, { once: true });
+  </script>
+</body>
+</html>
