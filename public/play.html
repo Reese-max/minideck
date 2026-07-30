@@ -5,14 +5,77 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
   <title>minideck 播放</title>
-  <link rel="stylesheet" href="app.css">
+  <link rel="stylesheet" href="/app.css">
 </head>
 <body class="player-page">
   <main class="player-shell" aria-label="簡報播放器">
-    <section id="play-stage" class="player-stage" data-deck-root tabindex="0" aria-label="16:9 簡報播放區">
-      <p>簡報載入中⋯</p>
+    <section id="play-stage" class="player-stage" tabindex="0" aria-label="16:9 簡報播放區">
+      <iframe id="play-deck" class="player-frame" title="簡報內容"></iframe>
     </section>
     <div id="play-counter" class="player-counter" aria-live="polite">1 / 1</div>
   </main>
+  <textarea id="deck-source" hidden aria-hidden="true">__MINIDECK_DECK_HTML__</textarea>
+  <script>
+    (() => {
+      "use strict";
+
+      const frame = document.querySelector("#play-deck");
+      const stage = document.querySelector("#play-stage");
+      const counter = document.querySelector("#play-counter");
+      let slides = [];
+      let current = 0;
+
+      function fit() {
+        const doc = frame.contentDocument;
+        if (!doc?.head) return;
+        const scale = Math.min(frame.clientWidth / 1920, frame.clientHeight / 1080);
+        let style = doc.querySelector("#md-player-style");
+        if (!style) {
+          style = doc.createElement("style");
+          style.id = "md-player-style";
+          doc.head.append(style);
+        }
+        style.textContent = `html,body{width:100%;height:100%;margin:0;overflow:hidden!important;background:#000}section.slide{display:none!important}section.slide[data-md-active]{display:block!important;transform:scale(${scale});transform-origin:top left}`;
+      }
+
+      function show(index) {
+        if (!slides.length) return;
+        current = Math.max(0, Math.min(index, slides.length - 1));
+        slides.forEach((slide, slideIndex) => {
+          slide.toggleAttribute("data-md-active", slideIndex === current);
+        });
+        counter.textContent = `${current + 1} / ${slides.length}`;
+        fit();
+      }
+
+      function onKey(event) {
+        if (["ArrowRight", "PageDown", " "].includes(event.key)) {
+          event.preventDefault();
+          show(current + 1);
+        } else if (["ArrowLeft", "PageUp"].includes(event.key)) {
+          event.preventDefault();
+          show(current - 1);
+        } else if (event.key === "Home") {
+          show(0);
+        } else if (event.key === "End") {
+          show(slides.length - 1);
+        } else if (event.key.toLowerCase() === "f") {
+          document.querySelector(".player-shell").requestFullscreen?.();
+        }
+      }
+
+      frame.addEventListener("load", () => {
+        slides = [...frame.contentDocument.querySelectorAll("section.slide")];
+        frame.contentDocument.addEventListener("click", () => show(current + 1));
+        frame.contentDocument.addEventListener("keydown", onKey);
+        show(0);
+        stage.focus();
+      });
+      addEventListener("keydown", onKey);
+      addEventListener("resize", fit);
+      stage.addEventListener("click", () => show(current + 1));
+      frame.srcdoc = document.querySelector("#deck-source").value;
+    })();
+  </script>
 </body>
 </html>

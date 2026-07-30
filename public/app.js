@@ -224,6 +224,7 @@
           items.push({
             element,
             text: text.slice(0, 40),
+            fullText: text,
             px: Math.round(px * 10) / 10,
             length: text.length,
             chrome: Boolean(element.closest(CHROME_SELECTOR)),
@@ -335,6 +336,11 @@
   const submitButton = form.querySelector('button[type="submit"]');
   const frame = document.querySelector("#deck-frame");
   const optimizeButton = document.querySelector("#btn-optimize");
+  const htmlButton = document.querySelector("#btn-html");
+  const pdfButton = document.querySelector("#btn-pdf");
+  const pptxButton = document.querySelector("#btn-pptx");
+  const shareButton = document.querySelector("#btn-share");
+  const downloadButtons = [htmlButton, pdfButton, pptxButton, shareButton];
   const versionList = document.querySelector("#version-list");
   const previewVersion = document.querySelector("[data-preview-version]");
   const turnstileBox = document.querySelector("#cf-turnstile");
@@ -352,6 +358,7 @@
   let busy = false;
   let currentAudit = null;
   let currentProjectId = "";
+  let currentDeckVersion = 0;
 
   function setStage(name, stageState, detail) {
     const card = document.querySelector(`[data-stage="${name}"]`);
@@ -367,6 +374,9 @@
     busy = value;
     submitButton.disabled = busy || !turnstileToken;
     optimizeButton.disabled = busy || !currentProjectId || !currentAudit;
+    downloadButtons.forEach((button) => {
+      button.disabled = busy || !currentProjectId || !currentDeckVersion;
+    });
     form.setAttribute("aria-busy", String(busy));
   }
 
@@ -448,7 +458,9 @@
       frame.src = `/api/projects/${id}/deck?version=${version}&_=${Date.now()}`;
     });
     fitPreview();
+    currentDeckVersion = version;
     previewVersion.textContent = `版本 v${version}`;
+    setBusy(busy);
     console.log("MD preview_loaded", `project=${id}`, `version=${version}`);
   }
 
@@ -547,6 +559,154 @@
     root.querySelector("#md-preview-style")?.remove();
     return `<!doctype html>\n${root.outerHTML}`;
   }
+
+  async function latestDeck() {
+    if (!currentProjectId) throw new Error("目前沒有可匯出的簡報");
+    const project = await MD.api.getProject(currentProjectId);
+    const version = project.versions.at(-1)?.version;
+    if (!version) throw new Error("目前沒有可匯出的簡報版本");
+    return {
+      version,
+      html: await fetchDeck(currentProjectId, version),
+    };
+  }
+
+  async function ensureLatestPreview() {
+    const deck = await latestDeck();
+    if (currentDeckVersion !== deck.version) {
+      await loadPreview(currentProjectId, deck.version);
+    }
+    return deck;
+  }
+
+  function downloadBlob(blob, filename) {
+    const link = document.createElement("a");
+    const url = URL.createObjectURL(blob);
+    link.href = url;
+    link.download = filename;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  const PRINT_STYLE = `@page{size:338.667mm 190.5mm;margin:0}
+html,body{margin:0!important;padding:0!important;background:#fff!important}
+.slide{display:block!important;width:1920px!important;height:1080px!important;overflow:hidden!important;page-break-after:always;break-after:page}
+.slide:last-of-type{page-break-after:auto;break-after:auto}`;
+
+  MD.exportx = {
+    lastPptxErrors: [],
+
+    async html() {
+      const deck = await latestDeck();
+      return new Blob([deck.html], { type: "text/html;charset=utf-8" });
+    },
+
+    async pdf() {
+      const printWindow = window.open("", "_blank");
+      if (!printWindow) throw new Error("瀏覽器封鎖了列印視窗，請允許彈出式視窗後重試");
+      try {
+        const deck = await latestDeck();
+        printWindow.document.open();
+        printWindow.document.write(deck.html);
+        printWindow.document.close();
+        await new Promise((resolve) => setTimeout(resolve));
+        const base = printWindow.document.createElement("base");
+        base.href = `${location.origin}/`;
+        printWindow.document.head.prepend(base);
+        const style = printWindow.document.createElement("style");
+        style.id = "md-print-style";
+        style.textContent = PRINT_STYLE;
+        printWindow.document.head.append(style);
+        await printWindow.document.fonts?.ready;
+        await Promise.all(
+          [...printWindow.document.images].map((image) =>
+            image.complete
+              ? Promise.resolve()
+              : new Promise((resolve) => {
+                  image.addEventListener("load", resolve, { once: true });
+                  image.addEventListener("error", resolve, { once: true });
+                }),
+          ),
+        );
+        printWindow.focus();
+        printWindow.print();
+      } catch (error) {
+        printWindow.close();
+        throw error;
+      }
+    },
+
+    async pptx(iframeDocument = frame.contentDocument) {
+      if (!globalThis.PptxGenJS || !globalThis.htmlToImage?.toPng) {
+        throw new Error("PPTX 匯出元件未載入");
+      }
+      const sourceSlides = [...iframeDocument.querySelectorAll("section.slide")];
+      if (!sourceSlides.length) throw new Error("簡報沒有可匯出的投影片");
+
+      const textBySlide = measureSlides(iframeDocument).map(({ items }) =>
+        items.map((item) => item.fullText).join("\n"),
+      );
+      const pptx = new globalThis.PptxGenJS();
+      pptx.layout = "LAYOUT_WIDE";
+      pptx.author = "minideck";
+      pptx.company = "minideck";
+      pptx.subject = "minideck HTML 簡報匯出";
+      pptx.title = iframeDocument.title || "minideck 簡報";
+      const failures = [];
+      const previewStyle = iframeDocument.querySelector("#md-preview-style");
+      const previewMedia = previewStyle?.getAttribute("media");
+      previewStyle?.setAttribute("media", "not all");
+
+      try {
+        await new Promise(requestAnimationFrame);
+        for (const [index, sourceSlide] of sourceSlides.entries()) {
+          const slide = pptx.addSlide();
+          const notes = textBySlide[index].trim();
+          slide.addNotes(notes || `第 ${index + 1} 頁無可見文字`);
+          const name = notes.split("\n")[0]?.slice(0, 50) || `第 ${index + 1} 頁`;
+          try {
+            const data = await globalThis.htmlToImage.toPng(sourceSlide, {
+              width: 1920,
+              height: 1080,
+              canvasWidth: 1920,
+              canvasHeight: 1080,
+              pixelRatio: 1,
+              cacheBust: true,
+            });
+            slide.addImage({ data, x: 0, y: 0, w: 13.333, h: 7.5 });
+          } catch (error) {
+            failures.push(`${index + 1}. ${name}`);
+            console.error("MD pptx_slide_failed", `slide=${index + 1}`, name, error);
+            slide.addText(`第 ${index + 1} 頁匯出失敗：${name}`, {
+              x: 0.8,
+              y: 3.2,
+              w: 11.7,
+              h: 0.8,
+              align: "center",
+              color: "7A2430",
+              fontFace: "Microsoft JhengHei",
+              fontSize: 20,
+            });
+          }
+        }
+      } finally {
+        if (previewStyle) {
+          if (previewMedia === null) previewStyle.removeAttribute("media");
+          else previewStyle.setAttribute("media", previewMedia);
+        }
+      }
+
+      MD.exportx.lastPptxErrors = failures;
+      return pptx.write({ outputType: "blob" });
+    },
+
+    async share() {
+      if (!currentProjectId) throw new Error("目前沒有可分享的簡報");
+      const url = `${location.origin}/p/${currentProjectId}`;
+      await navigator.clipboard.writeText(url);
+      return url;
+    },
+  };
 
   function renderAudit(report) {
     const reportBox = document.querySelector("#audit-report");
@@ -745,8 +905,60 @@
     });
     currentAudit = null;
     currentProjectId = "";
+    currentDeckVersion = 0;
     submitButton.disabled = true;
   }
+
+  async function runExport(button, label, action) {
+    const original = button.innerHTML;
+    button.disabled = true;
+    button.textContent = `${label}中⋯`;
+    try {
+      await action();
+    } catch (error) {
+      console.error("MD export_error", `type=${label}`, error);
+      alert(error?.message ?? `${label}失敗`);
+    } finally {
+      button.innerHTML = original;
+      setBusy(busy);
+    }
+  }
+
+  htmlButton.addEventListener("click", () =>
+    runExport(htmlButton, "HTML 匯出", async () => {
+      const blob = await MD.exportx.html();
+      downloadBlob(blob, `minideck-${currentProjectId}.html`);
+      console.log("MD export_complete", "type=html", `bytes=${blob.size}`);
+    }),
+  );
+
+  pdfButton.addEventListener("click", () =>
+    runExport(pdfButton, "PDF 列印", () => MD.exportx.pdf()),
+  );
+
+  pptxButton.addEventListener("click", () =>
+    runExport(pptxButton, "PPTX 匯出", async () => {
+      await ensureLatestPreview();
+      const blob = await MD.exportx.pptx(frame.contentDocument);
+      downloadBlob(blob, `minideck-${currentProjectId}.pptx`);
+      console.log(
+        "MD export_complete",
+        "type=pptx",
+        `bytes=${blob.size}`,
+        `failed_slides=${MD.exportx.lastPptxErrors.length}`,
+      );
+      if (MD.exportx.lastPptxErrors.length) {
+        alert(`以下投影片轉圖失敗，已保留頁面與備忘稿：\n${MD.exportx.lastPptxErrors.join("\n")}`);
+      }
+    }),
+  );
+
+  shareButton.addEventListener("click", () =>
+    runExport(shareButton, "複製分享連結", async () => {
+      const url = await MD.exportx.share();
+      console.log("MD share_link_copied", url);
+    }),
+  );
 
   optimizeButton.addEventListener("click", async () => {
     if (busy || !currentProjectId || !currentAudit) return;

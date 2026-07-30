@@ -30,6 +30,13 @@ function json(data, status = 200) {
   });
 }
 
+function escapeHtml(value) {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
+}
+
 function limit(env, name) {
   const value = Number.parseInt(env[name], 10);
   if (!Number.isFinite(value) || value < 0) {
@@ -464,6 +471,34 @@ async function getImageResponse(env, hash) {
   return new Response(object.body, { headers });
 }
 
+async function getPlayerResponse(request, env, id) {
+  const result = await readDeck(env.DB, env.BUCKET, id);
+  if (!result.project) return json({ error: "專案不存在" }, 404);
+  if (!result.deck) return json({ error: "找不到簡報版本" }, 404);
+
+  const templateResponse = await env.ASSETS.fetch(
+    new URL("/play.html", request.url),
+  );
+  if (!templateResponse.ok) throw new Error("找不到播放頁模板");
+  const [template, deck] = await Promise.all([
+    templateResponse.text(),
+    result.deck.object.text(),
+  ]);
+  if (!template.includes("__MINIDECK_DECK_HTML__")) {
+    throw new Error("播放頁模板缺少 deck 插入點");
+  }
+
+  return new Response(
+    template.replace("__MINIDECK_DECK_HTML__", escapeHtml(deck)),
+    {
+      headers: {
+        "cache-control": "no-store",
+        "content-type": "text/html; charset=utf-8",
+      },
+    },
+  );
+}
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -510,8 +545,9 @@ export default {
         return await getImageResponse(env, imageMatch[1]);
       }
 
-      if (request.method === "GET" && /^\/p\/[^/]+$/.test(url.pathname)) {
-        return json({ error: "此功能尚未實作" }, 501);
+      const playerMatch = url.pathname.match(/^\/p\/([^/]+)$/);
+      if (playerMatch && request.method === "GET") {
+        return await getPlayerResponse(request, env, playerMatch[1]);
       }
       return json({ error: "找不到此路由" }, 404);
     } catch (error) {
