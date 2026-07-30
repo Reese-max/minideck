@@ -28,6 +28,7 @@ const missingToken = await create({ brief: "整合測試：缺少 token" });
 assert.equal(missingToken.status, 403);
 console.log("PASS 無 token -> 403");
 
+let projectId;
 for (let attempt = 1; attempt <= 3; attempt += 1) {
   const response = await create({
     brief: `整合測試專案 ${attempt}`,
@@ -36,6 +37,7 @@ for (let attempt = 1; attempt <= 3; attempt += 1) {
   assert.equal(response.status, 200);
   const { id } = await response.json();
   assert.match(id, /^[a-f0-9]{40}$/);
+  projectId ??= id;
   if (attempt === 1) console.log(`PASS 測試 token -> 200，id=${id}`);
 }
 
@@ -57,4 +59,56 @@ assert.equal(
 console.log(
   `PASS 429 後 global:projects 未增加，remaining=${afterLimit.globalRemaining.projects}`,
 );
+
+const fixture = `<!doctype html><html lang="zh-Hant-TW"><body>
+<section class="slide">第一頁</section>
+<section class="slide">第二頁</section>
+<section class="slide">第三頁</section>
+</body></html>`;
+const saveDeck = await fetch(`${BASE_URL}/api/projects/${projectId}/deck`, {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({ html: fixture }),
+});
+assert.equal(saveDeck.status, 200);
+assert.deepEqual(await saveDeck.json(), { version: 1 });
+
+const deck = await fetch(
+  `${BASE_URL}/api/projects/${projectId}/deck?version=1`,
+);
+assert.equal(deck.status, 200);
+assert.equal(await deck.text(), fixture);
+
+const state = await fetch(`${BASE_URL}/api/projects/${projectId}`);
+assert.equal(state.status, 200);
+const project = await state.json();
+assert.equal(project.status, "ready");
+assert.deepEqual(project.versions.map(({ version, origin }) => ({ version, origin })), [
+  { version: 1, origin: "imagefill" },
+]);
+assert.deepEqual(project.messages, []);
+console.log("PASS deck 儲存／讀取與專案狀態介面");
+
+const invalidImage = await fetch(
+  `${BASE_URL}/api/projects/${projectId}/image`,
+  {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ prompt: "integration test", ar: "4:3" }),
+  },
+);
+assert.equal(invalidImage.status, 400);
+console.log("PASS image 輸入驗證不呼叫 MiniMax");
+
+const invalidRevise = await fetch(
+  `${BASE_URL}/api/projects/${projectId}/revise`,
+  {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ message: "" }),
+  },
+);
+assert.equal(invalidRevise.status, 400);
+console.log("PASS revise 輸入驗證不呼叫 MiniMax");
 console.log("TASK_2_INTEGRATION_PASS");
+console.log("TASK_3_API_CONTRACT_PASS");

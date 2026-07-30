@@ -4,15 +4,17 @@ import {
   refund,
   verifyTurnstile,
 } from "./guard.js";
-import { assertD1Initialized, readQuotaCounts } from "./store.js";
-
-const NOT_IMPLEMENTED_ROUTES = [
-  ["GET", /^\/api\/projects\/[^/]+$/],
-  ["POST", /^\/api\/projects\/[^/]+\/(generate|image|revise|deck)$/],
-  ["GET", /^\/api\/projects\/[^/]+\/deck$/],
-  ["GET", /^\/img\/[a-f0-9]{8}\.jpg$/],
-  ["GET", /^\/p\/[^/]+$/],
-];
+import { generateImage, imageHash, streamDeck } from "./minimax.js";
+import {
+  assertD1Initialized,
+  claimProject,
+  getProject,
+  readDeck,
+  readProjectState,
+  readQuotaCounts,
+  releaseProject,
+  saveDeckVersion,
+} from "./store.js";
 
 function json(data, status = 200) {
   return Response.json(data, {
@@ -31,6 +33,14 @@ function limit(env, name) {
 
 function utcDay() {
   return new Date().toISOString().slice(0, 10).replaceAll("-", "");
+}
+
+async function requestJson(request) {
+  try {
+    return await request.json();
+  } catch {
+    return null;
+  }
 }
 
 async function ipProjectScope(request, salt) {
@@ -75,17 +85,13 @@ function projectId() {
 }
 
 async function createProject(request, env) {
-  let body;
-  try {
-    body = await request.json();
-  } catch {
-    return json({ error: "請提供有效的 JSON 請求" }, 400);
-  }
+  const body = await requestJson(request);
+  if (!body) return json({ error: "請提供有效的 JSON 請求" }, 400);
 
   const ip = request.headers.get("CF-Connecting-IP") ?? "127.0.0.1";
   if (
     !(await verifyTurnstile(
-      body?.turnstileToken,
+      body.turnstileToken,
       env.TURNSTILE_SECRET,
       ip,
     ))
@@ -96,7 +102,6 @@ async function createProject(request, env) {
   if (typeof body.brief !== "string" || !body.brief.trim()) {
     return json({ error: "請輸入簡報需求" }, 400);
   }
-
   const brief = body.brief.trim();
   if ([...brief].length > 2000) {
     return json({ error: "簡報需求不可超過 2000 字" }, 413);
@@ -106,7 +111,6 @@ async function createProject(request, env) {
   const hash = await ipHash(ip, env.IP_SALT);
   const ipScope = `ip:${hash}:projects`;
   const globalScope = "global:projects";
-
   if (
     !(await checkAndIncrement(
       env.DB,
@@ -117,7 +121,6 @@ async function createProject(request, env) {
   ) {
     return json({ error: "今日額度已滿" }, 429);
   }
-
   if (
     !(await checkAndIncrement(
       env.DB,
@@ -148,33 +151,337 @@ async function createProject(request, env) {
   return json({ id });
 }
 
-function isNotImplemented(method, pathname) {
-  return NOT_IMPLEMENTED_ROUTES.some(
-    ([routeMethod, pattern]) => routeMethod === method && pattern.test(pathname),
+async function reserveText(env, id, reserveRevise) {
+  const day = utcDay();
+  if (
+    !(await checkAndIncrement(
+      env.DB,
+      "global:text",
+      day,
+      limit(env, "LIMIT_GLOBAL_TEXT"),
+    ))
+  ) {
+    return null;
+  }
+
+  if (
+    reserveRevise &&
+    !(await checkAndIncrement(
+      env.DB,
+      `proj:${id}:revises`,
+      "all",
+      limit(env, "LIMIT_PROJECT_REVISES"),
+    ))
+  ) {
+    await refund(env.DB, "global:text", day);
+    return null;
+  }
+  return day;
+}
+
+function publicTextError(error) {
+  const message = error?.message ?? "";
+  return /^(MiniMax|伺服器未設定)/.test(message)
+    ? message
+    : "簡報生成失敗，請稍後再試";
+}
+
+async function settleTextFailure(env, id, day, error, reviseReserved) {
+  let refunded = false;
+  try {
+    refunded = await checkAndIncrement(
+      env.DB,
+      `proj:${id}:retries`,
+      "all",
+      limit(env, "LIMIT_PROJECT_RETRIES"),
+    );
+    if (refunded) await refund(env.DB, "global:text", day);
+    if (reviseReserved) {
+      await refund(env.DB, `proj:${id}:revises`, "all");
+    }
+  } finally {
+    await releaseProject(env.DB, id);
+  }
+  return { message: publicTextError(error), refunded };
+}
+
+async function generateDeck(env, ctx, id) {
+  const claimed = await claimProject(env.DB, id);
+  if (claimed === null) return json({ error: "專案不存在" }, 404);
+  if (!claimed) return json({ error: "專案正在生成中" }, 409);
+
+  const project = await getProject(env.DB, id);
+  const day = await reserveText(env, id, false);
+  if (!day) {
+    await releaseProject(env.DB, id);
+    return json({ error: "今日額度已滿" }, 429);
+  }
+
+  return streamDeck({
+    apiKey: env.MINIMAX_API_KEY,
+    messages: [
+      {
+        role: "user",
+        content: `請依以下需求產生簡報：\n${project.brief}`,
+      },
+    ],
+    ctx,
+    onComplete: async (html) => {
+      const version = await saveDeckVersion(
+        env.DB,
+        env.BUCKET,
+        id,
+        html,
+        "generate",
+      );
+      return { version, deckPath: `/api/projects/${id}/deck?version=${version}` };
+    },
+    onFailure: (error) => settleTextFailure(env, id, day, error, false),
+  });
+}
+
+async function reviseDeck(request, env, ctx, id) {
+  const body = await requestJson(request);
+  if (!body) return json({ error: "請提供有效的 JSON 請求" }, 400);
+  if (typeof body.message !== "string" || !body.message.trim()) {
+    return json({ error: "請輸入修訂指令" }, 400);
+  }
+  const message = body.message.trim();
+  if ([...message].length > 1000) {
+    return json({ error: "修訂指令不可超過 1000 字" }, 413);
+  }
+
+  const current = await readDeck(env.DB, env.BUCKET, id);
+  if (!current.project) return json({ error: "專案不存在" }, 404);
+  if (!current.deck) return json({ error: "找不到可修訂的簡報" }, 404);
+
+  const claimed = await claimProject(env.DB, id);
+  if (!claimed) return json({ error: "專案正在生成中" }, 409);
+
+  const day = await reserveText(env, id, true);
+  if (!day) {
+    await releaseProject(env.DB, id);
+    return json({ error: "今日額度已滿" }, 429);
+  }
+  const html = await current.deck.object.text();
+
+  return streamDeck({
+    apiKey: env.MINIMAX_API_KEY,
+    messages: [
+      {
+        role: "user",
+        content: `以下是目前最新版 HTML 簡報：\n${html}\n\n請依指令修訂並輸出完整新版 HTML：\n${message}`,
+      },
+    ],
+    ctx,
+    onComplete: async (revisedHtml) => {
+      const version = await saveDeckVersion(
+        env.DB,
+        env.BUCKET,
+        id,
+        revisedHtml,
+        "revise",
+        { user: message, assistant: revisedHtml },
+      );
+      return { version, deckPath: `/api/projects/${id}/deck?version=${version}` };
+    },
+    onFailure: (error) => settleTextFailure(env, id, day, error, true),
+  });
+}
+
+async function generateProjectImage(request, env, id) {
+  if (!(await getProject(env.DB, id))) {
+    return json({ error: "專案不存在" }, 404);
+  }
+
+  const body = await requestJson(request);
+  if (!body) return json({ error: "請提供有效的 JSON 請求" }, 400);
+  if (
+    typeof body.prompt !== "string" ||
+    !body.prompt.trim() ||
+    [...body.prompt.trim()].length > 1500
+  ) {
+    return json({ error: "圖片描述不可為空，且不得超過 1500 字" }, 400);
+  }
+  const prompt = body.prompt.trim();
+  const aspectRatio = body.ar ?? "16:9";
+  if (aspectRatio !== "16:9") {
+    return json({ error: "圖片比例只支援 16:9" }, 400);
+  }
+
+  const hash = await imageHash(prompt, aspectRatio);
+  const key = `images/${hash}.jpg`;
+  if (await env.BUCKET.head(key)) {
+    console.log("minimax_image_cache_hit", `hash=${hash}`, "minimax_requests=0");
+    return json({ url: `/img/${hash}.jpg` });
+  }
+
+  const day = utcDay();
+  const projectScope = `proj:${id}:images`;
+  const [projectImages, globalImages] = await readQuotaCounts(env.DB, [
+    { scope: projectScope, day: "all" },
+    { scope: "global:images", day },
+  ]);
+  if (
+    projectImages >= limit(env, "LIMIT_PROJECT_IMAGES") ||
+    globalImages >= limit(env, "LIMIT_GLOBAL_IMAGES")
+  ) {
+    return json({ error: "今日額度已滿" }, 429);
+  }
+
+  let generated;
+  try {
+    generated = await generateImage(
+      env.MINIMAX_API_KEY,
+      prompt,
+      aspectRatio,
+      hash,
+    );
+  } catch (error) {
+    console.error("image_generation_error", error);
+    return json({ error: "MiniMax 圖片生成失敗" }, 502);
+  }
+
+  await env.BUCKET.put(key, generated.image, {
+    httpMetadata: { contentType: generated.contentType },
+  });
+  if (
+    !(await checkAndIncrement(
+      env.DB,
+      projectScope,
+      "all",
+      limit(env, "LIMIT_PROJECT_IMAGES"),
+    ))
+  ) {
+    return json({ error: "今日額度已滿" }, 429);
+  }
+  if (
+    !(await checkAndIncrement(
+      env.DB,
+      "global:images",
+      day,
+      limit(env, "LIMIT_GLOBAL_IMAGES"),
+    ))
+  ) {
+    await refund(env.DB, projectScope, "all");
+    return json({ error: "今日額度已滿" }, 429);
+  }
+
+  return json({ url: `/img/${hash}.jpg` });
+}
+
+async function saveDeck(request, env, id) {
+  if (!(await getProject(env.DB, id))) {
+    return json({ error: "專案不存在" }, 404);
+  }
+  const body = await requestJson(request);
+  if (!body) return json({ error: "請提供有效的 JSON 請求" }, 400);
+  if (typeof body.html !== "string") {
+    return json({ error: "請提供 HTML 簡報" }, 400);
+  }
+  if (new TextEncoder().encode(body.html).byteLength > 2 * 1024 * 1024) {
+    return json({ error: "HTML 簡報不可超過 2MB" }, 413);
+  }
+  if (
+    (body.html.match(/<section\s+class=["']slide["'][^>]*>/gi) ?? []).length < 3
+  ) {
+    return json({ error: "HTML 簡報至少需要 3 頁" }, 400);
+  }
+  if ((body.html.match(/data-gen-prompt\s*=/gi) ?? []).length > 12) {
+    return json({ error: "HTML 簡報的圖片佔位符不可超過 12 個" }, 400);
+  }
+
+  const version = await saveDeckVersion(
+    env.DB,
+    env.BUCKET,
+    id,
+    body.html,
+    "imagefill",
   );
+  return json({ version });
+}
+
+async function getDeckResponse(env, id, versionText) {
+  let version;
+  if (versionText !== null) {
+    if (!/^\d+$/.test(versionText) || Number(versionText) < 1) {
+      return json({ error: "版本編號無效" }, 400);
+    }
+    version = Number(versionText);
+  }
+
+  const result = await readDeck(env.DB, env.BUCKET, id, version);
+  if (!result.project) return json({ error: "專案不存在" }, 404);
+  if (!result.deck) return json({ error: "找不到簡報版本" }, 404);
+
+  const headers = new Headers({ "cache-control": "no-store" });
+  result.deck.object.writeHttpMetadata(headers);
+  headers.set("content-type", "text/html; charset=utf-8");
+  return new Response(result.deck.object.body, { headers });
+}
+
+async function getImageResponse(env, hash) {
+  const object = await env.BUCKET.get(`images/${hash}.jpg`);
+  if (!object) return json({ error: "找不到圖片" }, 404);
+
+  const headers = new Headers({
+    "cache-control": "public, max-age=31536000, immutable",
+  });
+  object.writeHttpMetadata(headers);
+  headers.set("etag", object.httpEtag);
+  return new Response(object.body, { headers });
 }
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
     try {
       if (request.method === "GET" && url.pathname === "/api/quota") {
         return await getQuota(request, env);
       }
-
       if (request.method === "POST" && url.pathname === "/api/projects") {
         return await createProject(request, env);
       }
 
-      if (isNotImplemented(request.method, url.pathname)) {
-        return json({ error: "此功能尚未實作" }, 501);
+      const deckMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/deck$/);
+      if (deckMatch && request.method === "GET") {
+        return await getDeckResponse(env, deckMatch[1], url.searchParams.get("version"));
+      }
+      if (deckMatch && request.method === "POST") {
+        return await saveDeck(request, env, deckMatch[1]);
       }
 
+      const actionMatch = url.pathname.match(
+        /^\/api\/projects\/([^/]+)\/(generate|revise|image)$/,
+      );
+      if (actionMatch && request.method === "POST") {
+        const [, id, action] = actionMatch;
+        if (action === "generate") return await generateDeck(env, ctx, id);
+        if (action === "revise") return await reviseDeck(request, env, ctx, id);
+        return await generateProjectImage(request, env, id);
+      }
+
+      const projectMatch = url.pathname.match(/^\/api\/projects\/([^/]+)$/);
+      if (projectMatch && request.method === "GET") {
+        const state = await readProjectState(env.DB, projectMatch[1]);
+        return state
+          ? json(state)
+          : json({ error: "專案不存在" }, 404);
+      }
+
+      const imageMatch = url.pathname.match(/^\/img\/([a-f0-9]{8})\.jpg$/);
+      if (imageMatch && request.method === "GET") {
+        return await getImageResponse(env, imageMatch[1]);
+      }
+
+      if (request.method === "GET" && /^\/p\/[^/]+$/.test(url.pathname)) {
+        return json({ error: "此功能尚未實作" }, 501);
+      }
       return json({ error: "找不到此路由" }, 404);
     } catch (error) {
       console.error("request_failed", error);
-      return json({ error: "服務初始化失敗" }, 500);
+      return json({ error: "服務處理失敗" }, 500);
     }
   },
 };

@@ -14,6 +14,11 @@ database_id = "local-dev-placeholder"
 binding = "BUCKET"
 bucket_name = "minideck"
 
+[[rules]]
+type = "Text"
+globs = ["**/*.md"]
+fallthrough = true
+
 [vars]
 LIMIT_IP_PROJECTS = "3"
 LIMIT_GLOBAL_PROJECTS = "50"
