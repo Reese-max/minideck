@@ -1,0 +1,24 @@
+name = "minideck"
+main = "src/worker.js"
+compatibility_date = "2026-07-29"
+
+[assets]
+directory = "public"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "minideck"
+database_id = "local-dev-placeholder"
+
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "minideck"
+
+[vars]
+LIMIT_IP_PROJECTS = "3"
+LIMIT_GLOBAL_PROJECTS = "50"
+LIMIT_GLOBAL_TEXT = "300"
+LIMIT_GLOBAL_IMAGES = "250"
+LIMIT_PROJECT_REVISES = "6"
+LIMIT_PROJECT_IMAGES = "15"
+LIMIT_PROJECT_RETRIES = "2"
