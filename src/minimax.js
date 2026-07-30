@@ -3,6 +3,11 @@ import CONSULTANT_DARK from "../prompts/styles/consultant-dark.md";
 import MINIMAL_LIGHT from "../prompts/styles/minimal-light.md";
 import PITCH_DECK from "../prompts/styles/pitch-deck.md";
 import TECH_VIVID from "../prompts/styles/tech-vivid.md";
+import TYPOGRAPHY_JUDGE from "../prompts/judges/typography.md";
+import DATAVIZ_JUDGE from "../prompts/judges/dataviz.md";
+import NARRATIVE_JUDGE from "../prompts/judges/narrative.md";
+import EXECUTIVE_JUDGE from "../prompts/judges/executive.md";
+import { JUDGE_KEYS, parseJudgeJson } from "./judge-core.js";
 
 const TEXT_URL = "https://api.minimax.io/v1/chat/completions";
 const IMAGE_URL = "https://api.minimax.io/v1/image_generation";
@@ -14,6 +19,25 @@ const STYLE_PROMPTS = Object.freeze({
   "pitch-deck": PITCH_DECK,
   "tech-vivid": TECH_VIVID,
 });
+const JUDGE_SYSTEM_PROMPT = `You are a four-lens review panel for a professional presentation deck.
+Assess the supplied plain text once, then return all four assessments in one JSON object.
+Follow every lens rubric below. Scores may be integers or decimals from 0 through 10.
+Issues must be concise, actionable strings grounded in the supplied text, and must be written in Traditional Chinese (zh-TW).
+
+Return exactly this shape and no Markdown or prose:
+{"typography":{"score":0,"issues":[]},"dataviz":{"score":0,"issues":[]},"narrative":{"score":0,"issues":[]},"executive":{"score":0,"issues":[]}}
+
+--- TYPOGRAPHY ---
+${TYPOGRAPHY_JUDGE.trim()}
+
+--- DATA VISUALIZATION ---
+${DATAVIZ_JUDGE.trim()}
+
+--- NARRATIVE ---
+${NARRATIVE_JUDGE.trim()}
+
+--- EXECUTIVE ---
+${EXECUTIVE_JUDGE.trim()}`;
 
 export const DEFAULT_STYLE = "consultant-dark";
 
@@ -63,6 +87,57 @@ async function minimaxError(response, kind) {
   );
   error.failureClass = `upstream_http_${response.status}`;
   return error;
+}
+
+export async function judgeDeck(apiKey, plainText, fetchImpl = fetch) {
+  if (!apiKey) throw new Error("伺服器未設定 MiniMax API key");
+  console.log(
+    "minimax_judge_request",
+    "model=MiniMax-M3",
+    `text_chars=${[...plainText].length}`,
+  );
+  const response = await fetchImpl(TEXT_URL, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${apiKey}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      model: "MiniMax-M3",
+      stream: false,
+      thinking: { type: "disabled" },
+      messages: [
+        { role: "system", content: JUDGE_SYSTEM_PROMPT },
+        {
+          role: "user",
+          content: `以下是待評審簡報的純文字內容：\n\n${plainText}`,
+        },
+      ],
+    }),
+    signal: AbortSignal.timeout(TEXT_TIMEOUT_MS),
+  });
+  if (!response.ok) throw await minimaxError(response, "text");
+
+  let payload;
+  try {
+    payload = await response.json();
+  } catch {
+    throw new Error("MiniMax 評審回應不是合法 JSON");
+  }
+  const apiStatus = payload?.base_resp?.status_code;
+  if (apiStatus !== undefined && apiStatus !== 0) {
+    throw new Error(`MiniMax 評審失敗（錯誤 ${apiStatus}）`);
+  }
+  const content = payload?.choices?.[0]?.message?.content;
+  if (typeof content !== "string" || !content.trim()) {
+    throw new Error("MiniMax 評審回應缺少內容");
+  }
+  const result = parseJudgeJson(content);
+  console.log(
+    "minimax_judge_complete",
+    ...JUDGE_KEYS.map((key) => `${key}=${result[key].score}`),
+  );
+  return result;
 }
 
 async function readTextStream(body, onText) {

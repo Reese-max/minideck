@@ -145,6 +145,17 @@ export async function rollbackDeckVersion(db, bucket, id, sourceVersion) {
   return { project: source.project, version };
 }
 
+export async function appendProjectMessage(db, id, role, content) {
+  await db
+    .prepare(
+      `INSERT INTO messages(project_id, seq, role, content, created_at)
+       SELECT ?1, coalesce(max(seq), 0) + 1, ?2, ?3, ?4
+       FROM messages WHERE project_id = ?1`,
+    )
+    .bind(id, role, content, Date.now())
+    .run();
+}
+
 export async function readProjectState(db, id) {
   const project = await getProject(db, id);
   if (!project) return null;

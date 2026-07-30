@@ -145,6 +145,9 @@
     rollback(id, version) {
       return jsonRequest(`/api/projects/${id}/rollback`, { version });
     },
+    judge(id, version) {
+      return jsonRequest(`/api/projects/${id}/judge`, { version });
+    },
   };
 
   MD.pipeline = {
@@ -409,6 +412,94 @@
     },
   };
 
+  const HQ_STYLES = Object.freeze([
+    "consultant-dark",
+    "minimal-light",
+    "pitch-deck",
+  ]);
+  const HQ_LENSES = Object.freeze([
+    "typography",
+    "dataviz",
+    "narrative",
+    "executive",
+  ]);
+  const HQ_STYLE_LABELS = Object.freeze({
+    "consultant-dark": "顧問深色",
+    "minimal-light": "極簡亮色",
+    "pitch-deck": "募資提案",
+  });
+
+  MD.hq = {
+    styles: HQ_STYLES,
+
+    totalScore(judgement) {
+      return HQ_LENSES.reduce((total, lens) => {
+        const score = judgement?.[lens]?.score;
+        if (!Number.isFinite(score) || score < 0 || score > 10) {
+          throw new Error(`評審結果缺少合法的 ${lens} 分數`);
+        }
+        if (!Array.isArray(judgement[lens].issues)) {
+          throw new Error(`評審結果缺少合法的 ${lens} issues`);
+        }
+        return total + score;
+      }, 0);
+    },
+
+    async run({ generate, prepare, judge, rollback, onVariant }) {
+      const variants = [];
+      for (const [index, style] of HQ_STYLES.entries()) {
+        const generated = await generate(style, index + 1);
+        if (!Number.isInteger(generated?.version)) {
+          throw new Error("高標準生成未回傳版本");
+        }
+        const prepared = await prepare(generated.version, style, index + 1);
+        const version = Number.isInteger(prepared) ? prepared : prepared?.version;
+        if (!Number.isInteger(version)) {
+          throw new Error("高標準填圖未回傳版本");
+        }
+        const judgement = await judge(version, style, index + 1);
+        const entry = {
+          style,
+          generatedVersion: generated.version,
+          version,
+          judgement,
+          total: MD.hq.totalScore(judgement),
+        };
+        variants.push(entry);
+        await onVariant?.(entry, index + 1);
+      }
+
+      const winner = variants.reduce(
+        (best, entry) => (!best || entry.total > best.total ? entry : best),
+        null,
+      );
+      const rolledBack = await rollback(winner.version, winner);
+      if (!Number.isInteger(rolledBack?.version)) {
+        throw new Error("高標準回滾未回傳版本");
+      }
+      return { variants, winner, rollbackVersion: rolledBack.version };
+    },
+
+    tableHtml(result) {
+      const lensHeaders = ["字體", "資料視覺", "敘事", "決策"];
+      const rows = result.variants
+        .map((entry) => {
+          const cells = HQ_LENSES.map(
+            (lens) => `<td>${entry.judgement[lens].score}</td>`,
+          ).join("");
+          const winner = entry === result.winner;
+          return `<tr${winner ? ' class="is-winner"' : ""}><th scope="row">${HQ_STYLE_LABELS[entry.style]} · v${entry.version}${winner ? "（勝出）" : ""}</th>${cells}<td><strong>${entry.total}</strong></td></tr>`;
+        })
+        .join("");
+      return `<table><thead><tr><th scope="col">變體</th>${lensHeaders.map((label) => `<th scope="col">${label}</th>`).join("")}<th scope="col">總分</th></tr></thead><tbody>${rows}</tbody></table><p class="hq-winner">已將 ${HQ_STYLE_LABELS[result.winner.style]} v${result.winner.version} 回滾為目前版本 v${result.rollbackVersion}。</p>`;
+    },
+
+    render(result, container) {
+      container.innerHTML = MD.hq.tableHtml(result);
+      container.hidden = false;
+    },
+  };
+
   if (typeof document === "undefined") return;
 
   const form = document.querySelector("#brief-form");
@@ -420,6 +511,11 @@
   const iterateStopButton = document.querySelector("#btn-iterate-stop");
   const iterateSteerInput = document.querySelector("#iterate-steer");
   const iteratePanel = document.querySelector("#iterate-panel");
+  const hqMode = document.querySelector("#hq-mode");
+  const hqCost = document.querySelector("#hq-cost");
+  const hqResult = document.querySelector("#hq-result");
+  const hqResultBody = hqResult.querySelector(".hq-result-body");
+  const styleSelect = document.querySelector("#style-select");
   const htmlButton = document.querySelector("#btn-html");
   const pdfButton = document.querySelector("#btn-pdf");
   const pptxButton = document.querySelector("#btn-pptx");
@@ -459,6 +555,8 @@
   function setBusy(value) {
     busy = value;
     submitButton.disabled = busy || !turnstileToken;
+    hqMode.disabled = busy;
+    styleSelect.disabled = busy || hqMode.checked;
     optimizeButton.disabled = busy || !currentProjectId || !currentAudit;
     iterateButton.disabled = busy || !currentProjectId || !currentAudit;
     iterateStopButton.disabled = !iterationRunning;
@@ -467,6 +565,11 @@
       button.disabled = busy || !currentProjectId || !currentDeckVersion;
     });
     form.setAttribute("aria-busy", String(busy));
+  }
+
+  function syncHqMode() {
+    hqCost.hidden = !hqMode.checked;
+    styleSelect.disabled = busy || hqMode.checked;
   }
 
   function turnstileError(message) {
@@ -973,6 +1076,111 @@ html,body{margin:0!important;padding:0!important;background:#fff!important}
     await auditAndFix(id);
   }
 
+  async function runHighQuality(id, sourceData) {
+    hqResult.hidden = false;
+    hqResultBody.textContent = "準備三個變體⋯";
+    setStage("revise", "idle", "競賽完成後回滾勝出版本");
+    console.log(
+      "MD hq_start",
+      `project=${id}`,
+      "text_calls_expected=6",
+      "variants=3",
+    );
+
+    const result = await MD.hq.run({
+      generate: async (style, index) => {
+        let tokenChars = 0;
+        setStage("generate", "active", `生成變體 ${index} / 3（${HQ_STYLE_LABELS[style]}）⋯`);
+        console.log(
+          "MD hq_generate_start",
+          `project=${id}`,
+          `variant=${index}/3`,
+          `style=${style}`,
+        );
+        const generated = await MD.api.generate(
+          id,
+          (text) => {
+            tokenChars += text.length;
+            setStage(
+              "generate",
+              "active",
+              `變體 ${index} / 3 已接收 ${tokenChars.toLocaleString("zh-TW")} 字元`,
+            );
+          },
+          style,
+          sourceData,
+        );
+        console.log(
+          "MD hq_generate_done",
+          `project=${id}`,
+          `variant=${index}/3`,
+          `version=${generated.version}`,
+        );
+        return generated;
+      },
+      prepare: async (generatedVersion, style, index) => {
+        const html = await fetchDeck(id, generatedVersion);
+        const saved = await fillAndSave(id, html);
+        console.log(
+          "MD hq_variant_prepared",
+          `project=${id}`,
+          `variant=${index}/3`,
+          `style=${style}`,
+          `generated=${generatedVersion}`,
+          `version=${saved.version}`,
+        );
+        return saved;
+      },
+      judge: async (version, style, index) => {
+        setStage("audit", "active", `四鏡頭評審變體 ${index} / 3⋯`);
+        const judgement = await MD.api.judge(id, version);
+        console.log(
+          "MD hq_judge_done",
+          `project=${id}`,
+          `variant=${index}/3`,
+          `style=${style}`,
+          `version=${version}`,
+          `total=${MD.hq.totalScore(judgement)}`,
+        );
+        return judgement;
+      },
+      onVariant: (entry, index) => {
+        hqResultBody.textContent = `已完成 ${index} / 3：${HQ_STYLE_LABELS[entry.style]} ${entry.total} 分`;
+      },
+      rollback: async (version) => {
+        const rolledBack = await MD.api.rollback(id, version);
+        console.log(
+          "MD hq_rollback",
+          `project=${id}`,
+          `source=${version}`,
+          `version=${rolledBack.version}`,
+        );
+        return rolledBack;
+      },
+    });
+
+    MD.hq.render(result, hqResultBody);
+    await refreshVersions(id);
+    await loadPreview(id, result.rollbackVersion);
+    const report = MD.audit.run(frame.contentDocument);
+    renderAudit(report);
+    logAudit("hq_winner", report);
+    setStage("generate", "done", "三個風格變體皆已生成");
+    setStage("images", "done", "三個變體皆已依序填圖");
+    setStage("audit", "done", `勝出版本 ${report.fails.length} FAIL / ${report.warns.length} WARN`);
+    setStage("revise", "done", `已回滾勝出版本為 v${result.rollbackVersion}`);
+    console.log(
+      "MD hq_complete",
+      `project=${id}`,
+      `winner_style=${result.winner.style}`,
+      `winner_version=${result.winner.version}`,
+      `winner_total=${result.winner.total}`,
+      `rollback_version=${result.rollbackVersion}`,
+      "text_calls=6",
+    );
+    return result;
+  }
+
   function showError(error) {
     const active = stageNames.find((name) =>
       document.querySelector(`[data-stage="${name}"]`)?.classList.contains("is-active"),
@@ -1030,6 +1238,8 @@ html,body{margin:0!important;padding:0!important;background:#fff!important}
     iterationRunning = false;
     iterationStopRequested = false;
     resetIterationPanel();
+    hqResult.hidden = true;
+    hqResultBody.replaceChildren();
     iterateSteerInput.value = "";
     submitButton.disabled = true;
   }
@@ -1216,6 +1426,8 @@ html,body{margin:0!important;padding:0!important;background:#fff!important}
     }
   });
 
+  hqMode.addEventListener("change", syncHqMode);
+
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     if (busy) return;
@@ -1226,8 +1438,9 @@ html,body{margin:0!important;padding:0!important;background:#fff!important}
 
     const brief = document.querySelector("#brief-input").value.trim();
     const pages = document.querySelector("#page-count").value;
-    const style = document.querySelector("#style-select").value;
+    const style = styleSelect.value;
     const sourceData = document.querySelector("#source-data").value.trim();
+    const highQuality = hqMode.checked;
     const fullBrief = `${brief}\n\n請產生 ${pages} 頁。`;
     if ([...fullBrief].length > 2000) {
       showError(new Error("簡報需求加上頁數後不可超過 2000 字"));
@@ -1236,13 +1449,16 @@ html,body{margin:0!important;padding:0!important;background:#fff!important}
 
     setBusy(true);
     stageNames.forEach((name) => setStage(name, "idle", "等待中"));
+    hqResult.hidden = true;
+    hqResultBody.replaceChildren();
     try {
       const { id } = await MD.api.createProject(fullBrief, turnstileToken);
       currentProjectId = id;
       history.replaceState(null, "", `#p=${id}`);
       console.log("MD project_created", `project=${id}`);
       await refreshQuota();
-      await generateAndFill(id, style, sourceData);
+      if (highQuality) await runHighQuality(id, sourceData);
+      else await generateAndFill(id, style, sourceData);
     } catch (error) {
       showError(error);
     } finally {
@@ -1256,6 +1472,7 @@ html,body{margin:0!important;padding:0!important;background:#fff!important}
   });
 
   resetShell();
+  syncHqMode();
   initializeTurnstile();
   refreshQuota().catch(() => {});
   addEventListener("resize", fitPreview);

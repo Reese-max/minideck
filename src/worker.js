@@ -9,9 +9,13 @@ import {
   generateImage,
   imageHash,
   isDeckStyle,
+  judgeDeck,
   streamDeck,
 } from "./minimax.js";
+import { htmlToPlainText } from "./judge-core.js";
+import { runWithJudgeQuota } from "./judge-quota.js";
 import {
+  appendProjectMessage,
   assertD1Initialized,
   claimProject,
   getProject,
@@ -293,6 +297,60 @@ async function rollbackDeck(request, env, id) {
   return json({ version: result.version });
 }
 
+async function judgeDeckVersion(request, env, id) {
+  const body = await requestJson(request);
+  if (!body) return json({ error: "請提供有效的 JSON 請求" }, 400);
+  if (!Number.isInteger(body.version) || body.version < 1) {
+    return json({ error: "版本編號無效" }, 400);
+  }
+
+  const source = await readDeck(env.DB, env.BUCKET, id, body.version);
+  if (!source.project) return json({ error: "專案不存在" }, 404);
+  if (!source.deck) return json({ error: "找不到簡報版本" }, 404);
+
+  const day = utcDay();
+  try {
+    const reservation = await runWithJudgeQuota(
+      env.DB,
+      day,
+      limit(env, "LIMIT_GLOBAL_TEXT"),
+      async () => {
+        const html = await source.deck.object.text();
+        const result = await judgeDeck(
+          env.MINIMAX_API_KEY,
+          htmlToPlainText(html, 8000),
+        );
+        await appendProjectMessage(
+          env.DB,
+          id,
+          "judge",
+          JSON.stringify({ version: body.version, ...result }),
+        );
+        return result;
+      },
+    );
+    if (!reservation.accepted) {
+      console.log(
+        "judge_quota_rejected",
+        `project=${id}`,
+        `version=${body.version}`,
+        "minimax_requests=0",
+      );
+      return json({ error: "今日額度已滿" }, 429);
+    }
+    return json(reservation.value);
+  } catch (error) {
+    await refund(env.DB, "global:text", day);
+    console.error(
+      "judge_failed",
+      `project=${id}`,
+      `version=${body.version}`,
+      error,
+    );
+    return json({ error: publicTextError(error) }, 502);
+  }
+}
+
 async function reviseDeck(request, env, ctx, id) {
   const body = await requestJson(request);
   if (!body) return json({ error: "請提供有效的 JSON 請求" }, 400);
@@ -534,7 +592,7 @@ export default {
       }
 
       const actionMatch = url.pathname.match(
-        /^\/api\/projects\/([^/]+)\/(generate|revise|image|rollback)$/,
+        /^\/api\/projects\/([^/]+)\/(generate|revise|image|rollback|judge)$/,
       );
       if (actionMatch && request.method === "POST") {
         const [, id, action] = actionMatch;
@@ -543,6 +601,7 @@ export default {
         }
         if (action === "revise") return await reviseDeck(request, env, ctx, id);
         if (action === "rollback") return await rollbackDeck(request, env, id);
+        if (action === "judge") return await judgeDeckVersion(request, env, id);
         return await generateProjectImage(request, env, id);
       }
 

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 
-const BASE_URL = "http://127.0.0.1:8787";
+const BASE_URL = process.env.MINIDECK_BASE_URL ?? "http://127.0.0.1:8787";
 const hex = randomUUID().replaceAll("-", "");
 const testIp = `2001:db8:${hex.slice(0, 4)}:${hex.slice(4, 8)}:${hex.slice(8, 12)}:${hex.slice(12, 16)}:${hex.slice(16, 20)}:${hex.slice(20, 24)}`;
 
@@ -164,3 +164,4 @@ assert.equal(invalidRevise.status, 400);
 console.log("PASS revise 輸入驗證不呼叫 MiniMax");
 console.log("TASK_2_INTEGRATION_PASS");
 console.log("TASK_3_API_CONTRACT_PASS");
+await import("./judge-mock.mjs");

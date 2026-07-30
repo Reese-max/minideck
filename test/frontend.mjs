@@ -107,3 +107,4 @@ assert.equal(cleanTie.best.version, 2);
 console.log("TASK_7_5_LATEST_TIE_PASS best=v2");
 console.log("TASK_6_OPTIMIZE_PROMPT_PASS");
 console.log("TASK_5_FRONTEND_PIPELINE_PASS");
+await import("./hq-mock.mjs");

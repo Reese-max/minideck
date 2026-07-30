@@ -73,6 +73,13 @@
 
             <button class="primary-button" type="submit">開始生成</button>
           </div>
+          <div class="hq-control">
+            <label class="hq-toggle" for="hq-mode">
+              <input id="hq-mode" name="hq-mode" type="checkbox" aria-describedby="hq-cost">
+              <span><strong>高標準：三變體競賽</strong><small>固定比較顧問深色、極簡亮色與募資提案。</small></span>
+            </label>
+            <p id="hq-cost" class="hq-cost" hidden>約需 6 次文字呼叫（3 次生成＋3 次四鏡頭評審），並為各版依序填圖。</p>
+          </div>
         </form>
       </section>
 
@@ -206,6 +213,16 @@
       </div>
       <p class="chat-note">修訂會佔用今日額度。</p>
     </aside>
+    <section id="hq-result" class="hq-result panel" aria-labelledby="hq-result-title" hidden>
+      <div class="hq-result-heading">
+        <div>
+          <p class="eyebrow">四鏡頭評審</p>
+          <h2 id="hq-result-title">三變體競賽結果</h2>
+        </div>
+        <span class="status-badge">40 分制</span>
+      </div>
+      <div class="hq-result-body" aria-live="polite"></div>
+    </section>
   </main>
   <script defer src="https://challenges.cloudflare.com/turnstile/v0/api.js"></script>
   <script defer src="vendor/pptxgen.bundle.js"></script>
