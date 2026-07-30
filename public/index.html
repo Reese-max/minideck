@@ -1,1 +1,165 @@
-<!doctype html><html lang="zh-Hant"><meta charset="utf-8"><title>minideck</title><body>minideck 本地開發骨架</body></html>
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>minideck｜MiniMax 簡報生成器</title>
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="minideck 首頁">
+      <span class="brand-mark" aria-hidden="true"><span></span></span>
+      <span class="brand-name">minideck</span>
+      <span class="brand-divider" aria-hidden="true"></span>
+      <span class="brand-tagline">MiniMax 簡報生成器</span>
+    </a>
+
+    <div class="quota" aria-label="今日剩餘額度">
+      <span>今日剩餘</span>
+      <strong>7</strong>
+      <span>份</span>
+      <div id="quota-bar" class="quota-bar" role="progressbar" aria-label="今日額度" aria-valuemin="0" aria-valuemax="10" aria-valuenow="7">
+        <span></span>
+      </div>
+    </div>
+  </header>
+
+  <main class="workspace">
+    <div class="main-column">
+      <section class="panel brief-card" aria-labelledby="brief-title">
+        <div class="section-heading">
+          <h1 id="brief-title">要做什麼簡報？</h1>
+          <p>描述主題、受眾與重點，愈具體，產出的結構愈準確。</p>
+        </div>
+
+        <form id="brief-form">
+          <label class="sr-only" for="brief-input">簡報需求</label>
+          <textarea id="brief-input" name="brief" maxlength="2000" placeholder="例如：為投資人做一份 B 輪募資簡報，聚焦 2026 上半年營收成長、產品線擴張與市場切入策略；語氣專業自信。"></textarea>
+
+          <div class="form-controls">
+            <label class="field-label" for="page-count">
+              <span>頁數</span>
+              <select id="page-count" name="pageCount">
+                <option value="5">5 頁</option>
+                <option value="8">8 頁</option>
+                <option value="10">10 頁</option>
+                <option value="12" selected>12 頁</option>
+              </select>
+            </label>
+
+            <div id="cf-turnstile" class="turnstile-card" aria-label="Cloudflare Turnstile 人機驗證容器">
+              <span class="turnstile-ring" aria-hidden="true"></span>
+              <span>人機驗證中⋯</span>
+              <small>Turnstile</small>
+            </div>
+
+            <button class="primary-button" type="submit">開始生成</button>
+          </div>
+        </form>
+      </section>
+
+      <section id="progress-panel" class="progress-panel" aria-label="簡報生成進度">
+        <article class="stage-card is-done" data-stage="generate" data-state="done">
+          <div class="stage-topline">
+            <span class="stage-name"><i aria-hidden="true"></i>生成</span>
+            <span class="stage-state">DONE</span>
+          </div>
+          <p>12 頁大綱與內文完成</p>
+        </article>
+
+        <article class="stage-card is-active" data-stage="images" data-state="active">
+          <div class="stage-topline">
+            <span class="stage-name"><i aria-hidden="true"></i>填圖</span>
+            <span class="stage-state">ACTIVE</span>
+          </div>
+          <p>配圖 5 / 9</p>
+        </article>
+
+        <article class="stage-card is-idle" data-stage="audit" data-state="idle">
+          <div class="stage-topline">
+            <span class="stage-name"><i aria-hidden="true"></i>稽核</span>
+            <span class="stage-state">IDLE</span>
+          </div>
+          <p>等待中</p>
+        </article>
+
+        <article class="stage-card is-idle" data-stage="revise" data-state="idle">
+          <div class="stage-topline">
+            <span class="stage-name"><i aria-hidden="true"></i>修正</span>
+            <span class="stage-state">IDLE</span>
+          </div>
+          <p>等待中</p>
+        </article>
+      </section>
+
+      <section class="panel preview-panel" aria-labelledby="preview-title">
+        <header class="panel-toolbar">
+          <div class="window-dots" aria-hidden="true"><span></span><span></span><span></span></div>
+          <h2 id="preview-title">預覽</h2>
+          <span>第 3 / 12 頁</span>
+        </header>
+        <div class="deck-stage">
+          <iframe id="deck-frame" title="簡報預覽" loading="eager" srcdoc="<!doctype html><html lang='zh-Hant-TW'><meta charset='utf-8'><style>*{box-sizing:border-box}html,body{width:100%;height:100%;margin:0}body{display:flex;align-items:center;background:#0b0d11;color:#f4f5f7;font-family:Arial,'Microsoft JhengHei',sans-serif}.slide{width:100%;padding:8%}.eyebrow{margin:0 0 3%;color:#e8664d;font-size:2.1vw;font-weight:700;letter-spacing:.12em}.grid{display:grid;grid-template-columns:1.35fr .65fr;gap:7%;align-items:center}h1{max-width:15ch;margin:0;font-size:5.5vw;line-height:1.1}p{color:#9ba1ae;font-size:1.8vw;line-height:1.7}.metric{margin:4% 0;padding:8%;border:1px solid #2a2e38;border-radius:12px;background:#181b22}.metric strong{display:block;color:#4da3e8;font-size:4vw}.metric:last-child strong{color:#e8664d}.metric span{color:#9ba1ae;font-size:1.35vw}</style><body><main class='slide'><p class='eyebrow'>02 — 市場機會</p><div class='grid'><section><h1>亞太企業簡報自動化尚未被滿足的需求</h1><p>組織大量時間花在手動重整資訊，導致決策速度與內容一致性受限。</p></section><aside><div class='metric'><strong>62%</strong><span>每週逾 4 小時用於簡報</span></div><div class='metric'><strong>3.4x</strong><span>導入後產出速度提升</span></div></aside></div></main></body></html>"></iframe>
+        </div>
+      </section>
+
+      <section id="export-buttons" class="panel export-row" aria-label="匯出與分享">
+        <div>
+          <h2>匯出簡報</h2>
+          <p>下載目前版本，或複製分享連結。</p>
+        </div>
+        <div class="export-actions">
+          <button id="btn-html" class="outline-button" type="button"><span aria-hidden="true">〈 〉</span>HTML</button>
+          <button id="btn-pdf" class="outline-button" type="button"><span aria-hidden="true">↓</span>PDF</button>
+          <button id="btn-pptx" class="outline-button" type="button"><span aria-hidden="true">↓</span>PPTX</button>
+          <button id="btn-share" class="outline-button" type="button"><span aria-hidden="true">↗</span>分享</button>
+        </div>
+      </section>
+
+      <details id="audit-report" class="panel audit-report">
+        <summary>
+          <span><i aria-hidden="true"></i>稽核報告</span>
+          <span class="audit-summary">1 FAIL・1 WARN・10 PASS</span>
+        </summary>
+        <div class="audit-list">
+          <div class="audit-item audit-fail"><strong>FAIL</strong><span>第 6 頁單頁內文 684 字，超過 620 字上限。</span></div>
+          <div class="audit-item audit-warn"><strong>WARN</strong><span>第 4 頁內文字級為 15px，建議提高至 17px。</span></div>
+          <div class="audit-item audit-pass"><strong>PASS</strong><span>其餘 10 頁通過可讀性檢查。</span></div>
+        </div>
+      </details>
+    </div>
+
+    <aside id="chat-panel" class="panel chat-panel" aria-labelledby="chat-title">
+      <header class="chat-header">
+        <h2 id="chat-title"><i aria-hidden="true"></i>修訂對話</h2>
+        <span>針對整份或單頁</span>
+      </header>
+
+      <div id="chat-log" class="chat-log" aria-live="polite">
+        <div class="message assistant-message">
+          <p>已完成 12 頁草稿，稽核發現 1 項數據不一致。要我直接修正嗎？</p>
+        </div>
+        <div class="message user-message">
+          <p>先把第 3 頁的語氣改得更有說服力一點</p>
+        </div>
+        <div class="message assistant-message">
+          <p>好的，第 3 頁標題與內文已改寫，強調市場規模與急迫性。</p>
+          <a href="#deck-frame">檢視變更 →</a>
+        </div>
+        <div class="message user-message">
+          <p>第 7 頁的數據以內文為準</p>
+        </div>
+      </div>
+
+      <div class="chat-composer">
+        <label class="sr-only" for="chat-input">輸入修訂指令</label>
+        <input id="chat-input" type="text" maxlength="1000" placeholder="輸入修訂指令⋯">
+        <button type="button" aria-label="送出修訂">↑</button>
+      </div>
+      <p class="chat-note">修訂會佔用今日額度。</p>
+    </aside>
+  </main>
+</body>
+</html>
