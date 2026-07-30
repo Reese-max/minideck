@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
+  <meta name="turnstile-sitekey" content="1x00000000000000000000AA">
   <title>minideck｜MiniMax 簡報生成器</title>
   <link rel="stylesheet" href="app.css">
 </head>
@@ -34,7 +35,7 @@
           <p>描述主題、受眾與重點，愈具體，產出的結構愈準確。</p>
         </div>
 
-        <form id="brief-form">
+        <form id="brief-form" class="form-controls--with-style">
           <label class="sr-only" for="brief-input">簡報需求</label>
           <textarea id="brief-input" name="brief" maxlength="2000" placeholder="例如：為投資人做一份 B 輪募資簡報，聚焦 2026 上半年營收成長、產品線擴張與市場切入策略；語氣專業自信。"></textarea>
 
@@ -46,6 +47,16 @@
                 <option value="8">8 頁</option>
                 <option value="10">10 頁</option>
                 <option value="12" selected>12 頁</option>
+              </select>
+            </label>
+
+            <label class="field-label" for="style-select">
+              <span>風格</span>
+              <select id="style-select" name="style">
+                <option value="consultant-dark" selected>顧問深色</option>
+                <option value="minimal-light">簡約亮色</option>
+                <option value="pitch-deck">Pitch Deck</option>
+                <option value="tech-vivid">科技風</option>
               </select>
             </label>
 
@@ -98,10 +109,10 @@
         <header class="panel-toolbar">
           <div class="window-dots" aria-hidden="true"><span></span><span></span><span></span></div>
           <h2 id="preview-title">預覽</h2>
-          <span>第 3 / 12 頁</span>
+          <span data-preview-version>尚無版本</span>
         </header>
         <div class="deck-stage">
-          <iframe id="deck-frame" title="簡報預覽" loading="eager" srcdoc="<!doctype html><html lang='zh-Hant-TW'><meta charset='utf-8'><style>*{box-sizing:border-box}html,body{width:100%;height:100%;margin:0}body{display:flex;align-items:center;background:#0b0d11;color:#f4f5f7;font-family:Arial,'Microsoft JhengHei',sans-serif}.slide{width:100%;padding:8%}.eyebrow{margin:0 0 3%;color:#e8664d;font-size:2.1vw;font-weight:700;letter-spacing:.12em}.grid{display:grid;grid-template-columns:1.35fr .65fr;gap:7%;align-items:center}h1{max-width:15ch;margin:0;font-size:5.5vw;line-height:1.1}p{color:#9ba1ae;font-size:1.8vw;line-height:1.7}.metric{margin:4% 0;padding:8%;border:1px solid #2a2e38;border-radius:12px;background:#181b22}.metric strong{display:block;color:#4da3e8;font-size:4vw}.metric:last-child strong{color:#e8664d}.metric span{color:#9ba1ae;font-size:1.35vw}</style><body><main class='slide'><p class='eyebrow'>02 — 市場機會</p><div class='grid'><section><h1>亞太企業簡報自動化尚未被滿足的需求</h1><p>組織大量時間花在手動重整資訊，導致決策速度與內容一致性受限。</p></section><aside><div class='metric'><strong>62%</strong><span>每週逾 4 小時用於簡報</span></div><div class='metric'><strong>3.4x</strong><span>導入後產出速度提升</span></div></aside></div></main></body></html>"></iframe>
+          <iframe id="deck-frame" title="簡報預覽" loading="eager" sandbox="allow-same-origin" srcdoc="<!doctype html><html lang='zh-Hant-TW'><meta charset='utf-8'><style>html,body{height:100%;margin:0}body{display:grid;place-items:center;background:#0b0d11;color:#9399a6;font:16px Arial,'Microsoft JhengHei',sans-serif}</style><body><p>簡報會顯示在這裡</p></body></html>"></iframe>
         </div>
       </section>
 
@@ -118,17 +129,27 @@
         </div>
       </section>
 
-      <details id="audit-report" class="panel audit-report">
-        <summary>
-          <span><i aria-hidden="true"></i>稽核報告</span>
-          <span class="audit-summary">1 FAIL・1 WARN・10 PASS</span>
-        </summary>
-        <div class="audit-list">
-          <div class="audit-item audit-fail"><strong>FAIL</strong><span>第 6 頁單頁內文 684 字，超過 620 字上限。</span></div>
-          <div class="audit-item audit-warn"><strong>WARN</strong><span>第 4 頁內文字級為 15px，建議提高至 17px。</span></div>
-          <div class="audit-item audit-pass"><strong>PASS</strong><span>其餘 10 頁通過可讀性檢查。</span></div>
-        </div>
-      </details>
+      <div class="review-grid">
+        <details id="audit-report" class="panel audit-report">
+          <summary>
+            <span><i aria-hidden="true"></i>稽核報告</span>
+            <span class="audit-summary">尚未執行</span>
+          </summary>
+          <div class="audit-list">
+            <div class="audit-item"><strong>待執行</strong><span>目前尚無稽核結果。</span></div>
+          </div>
+        </details>
+
+        <section id="version-list" class="panel version-list" aria-labelledby="version-title" aria-live="polite">
+          <header>
+            <div>
+              <h2 id="version-title">版本歷史</h2>
+              <p>可回到任一舊版，系統會另存新版本。</p>
+            </div>
+          </header>
+          <div class="version-rows"><p class="version-empty">尚無版本</p></div>
+        </section>
+      </div>
     </div>
 
     <aside id="chat-panel" class="panel chat-panel" aria-labelledby="chat-title">
@@ -161,5 +182,7 @@
       <p class="chat-note">修訂會佔用今日額度。</p>
     </aside>
   </main>
+  <script defer src="https://challenges.cloudflare.com/turnstile/v0/api.js"></script>
+  <script defer src="app.js"></script>
 </body>
 </html>

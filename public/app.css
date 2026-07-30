@@ -848,3 +848,131 @@ a:focus-visible {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* Task 5：沿用既有語彙的風格與版本元件。 */
+.form-controls--with-style .form-controls {
+  grid-template-columns: minmax(110px, 0.55fr) minmax(170px, 0.8fr) minmax(260px, 1.1fr) minmax(220px, 1.2fr);
+}
+
+#style-select {
+  width: 100%;
+  min-height: 52px;
+  padding: 0 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-deep);
+}
+
+.primary-button:disabled,
+.outline-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+  transform: none;
+}
+
+.turnstile-card.is-error {
+  border-color: rgb(227 94 104 / 55%);
+  color: var(--danger);
+}
+
+.stage-card.is-error {
+  border-color: rgb(227 94 104 / 55%);
+}
+
+.is-error .stage-name i,
+.is-error .stage-state {
+  background: var(--danger);
+  color: var(--danger);
+}
+
+.review-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(280px, 0.75fr);
+  gap: 20px;
+  align-items: start;
+}
+
+.version-list {
+  overflow: hidden;
+}
+
+.version-list > header {
+  min-height: 58px;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.version-list h2 {
+  margin: 0;
+  font-size: 0.88rem;
+}
+
+.version-list header p,
+.version-empty {
+  margin: 3px 0 0;
+  color: var(--muted);
+  font-size: 0.7rem;
+}
+
+.version-rows {
+  display: grid;
+  gap: 9px;
+  max-height: 260px;
+  overflow-y: auto;
+  padding: 12px;
+}
+
+.version-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 11px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface-deep);
+}
+
+.version-row > div {
+  display: grid;
+  min-width: 0;
+}
+
+.version-row strong {
+  overflow: hidden;
+  font-size: 0.74rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.version-row time {
+  color: var(--muted);
+  font-size: 0.66rem;
+}
+
+.version-rollback {
+  min-height: 32px;
+  flex: 0 0 auto;
+}
+
+@media (max-width: 1350px) {
+  .form-controls--with-style .form-controls {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .form-controls--with-style .primary-button {
+    grid-column: auto;
+  }
+}
+
+@media (max-width: 760px) {
+  .review-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 620px) {
+  .form-controls--with-style .form-controls {
+    grid-template-columns: 1fr;
+  }
+}
