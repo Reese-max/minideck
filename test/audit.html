@@ -13,6 +13,7 @@
   <h1>MiniDeck 稽核 fixture</h1>
   <p id="status">執行中⋯</p>
   <pre id="result"></pre>
+  <pre id="iteration-result"></pre>
   <iframe title="違規簡報" src="fixtures/bad-deck.html"></iframe>
   <script src="../public/app.js"></script>
   <script>
@@ -54,6 +55,51 @@
         changed: fix.changed,
       }));
       if (!pass) console.error("AUDIT_FIXTURE_FAIL", JSON.stringify(evidence));
+
+      const frame = event.currentTarget;
+      frame.addEventListener("load", async () => {
+        const iterateDoc = frame.contentDocument;
+        iterateDoc.querySelectorAll("section.slide p")[1].textContent = "一般密度文字。";
+        iterateDoc.querySelectorAll("section.slide p")[2].textContent = "一般指標文字。";
+        const iterateBefore = MD.audit.run(iterateDoc);
+        let mechanical;
+        const iteration = await MD.iteration.run({
+          maxRounds: 1,
+          step: async () => {
+            mechanical = MD.audit.fixMechanical(iterateDoc);
+            return { version: 1, report: MD.audit.run(iterateDoc) };
+          },
+          rollback: async (version) => ({ version }),
+        });
+        const iterateAfter = iteration.rounds[0].report;
+        const iterationPass =
+          iterateBefore.fails.length > 0 &&
+          iterateAfter.fails.length === 0 &&
+          mechanical.changed > 0 &&
+          iteration.rounds[0].score === MD.iteration.score(iterateAfter);
+        globalThis.iterationEvidence = {
+          pass: iterationPass,
+          failsBefore: iterateBefore.fails.length,
+          failsBeforeScore: iterateAfter.fails.length,
+          changed: mechanical.changed,
+          score: iteration.rounds[0].score,
+        };
+        document.querySelector("#iteration-result").textContent =
+          JSON.stringify(globalThis.iterationEvidence, null, 2);
+        document.body.dataset.iterationResult = iterationPass ? "pass" : "fail";
+        document.querySelector("#status").textContent = pass && iterationPass ? "PASS" : "FAIL";
+        console.log(
+          `TASK_7_5_ITERATE_MECHFIX_${iterationPass ? "PASS" : "FAIL"}`,
+          `fails_before=${iterateBefore.fails.length}`,
+          `fails_before_score=${iterateAfter.fails.length}`,
+          `changed=${mechanical.changed}`,
+          `score=${iteration.rounds[0].score}`,
+        );
+        if (!iterationPass) {
+          console.error("TASK_7_5_ITERATE_MECHFIX_FAIL", JSON.stringify(globalThis.iterationEvidence));
+        }
+      }, { once: true });
+      frame.src = "fixtures/bad-deck.html?iterate";
     }, { once: true });
   </script>
 </body>

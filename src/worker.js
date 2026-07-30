@@ -217,6 +217,12 @@ async function settleTextFailure(env, id, day, error, reviseReserved) {
   } finally {
     await releaseProject(env.DB, id);
   }
+  console.log(
+    "text_failure_settled",
+    `action=${reviseReserved ? "revise" : "generate"}`,
+    `class=${error?.failureClass ?? "unclassified"}`,
+    `refunded=${refunded}`,
+  );
   return { message: publicTextError(error), refunded };
 }
 

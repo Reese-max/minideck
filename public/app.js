@@ -1152,9 +1152,8 @@ html,body{margin:0!important;padding:0!important;background:#fff!important}
             `version=${revised.version}`,
           );
           const html = await fetchDeck(id, revised.version);
-          const saved = await fillAndSave(id, html);
-          setStage("audit", "active", `量測迭代第 ${round} 輪⋯`);
-          const report = MD.audit.run(frame.contentDocument);
+          await fillAndSave(id, html);
+          const report = await auditAndFix(id, false);
           logAudit(`iterate_${round}`, report);
           renderAudit(report);
           quotaUsed += 1;
@@ -1162,13 +1161,13 @@ html,body{margin:0!important;padding:0!important;background:#fff!important}
             "MD iterate_round_score",
             `project=${id}`,
             `round=${round}`,
-            `version=${saved.version}`,
+            `version=${currentDeckVersion}`,
             `score=${MD.iteration.score(report)}`,
             `fails=${report.fails.length}`,
             `warns=${report.warns.length}`,
             `quota=${quotaUsed}/6`,
           );
-          return { version: saved.version, report };
+          return { version: currentDeckVersion, report };
         },
         onRound: (entry) => renderIterationRound(entry, quotaUsed),
         rollback: async (version) => {
