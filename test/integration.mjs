@@ -16,6 +16,13 @@ function create(payload) {
   });
 }
 
+function projectHeaders(token, json = false) {
+  return {
+    ...(json ? { "content-type": "application/json" } : {}),
+    "X-Project-Token": token,
+  };
+}
+
 async function quota() {
   const response = await fetch(`${BASE_URL}/api/quota`, {
     headers: { "CF-Connecting-IP": testIp },
@@ -29,23 +36,36 @@ assert.equal(missingToken.status, 403);
 console.log("PASS 無 token -> 403");
 
 let projectId;
+let projectToken;
 for (let attempt = 1; attempt <= 3; attempt += 1) {
   const response = await create({
     brief: `整合測試專案 ${attempt}`,
     turnstileToken: "integration-test-token",
   });
   assert.equal(response.status, 200);
-  const { id } = await response.json();
+  const { id, token } = await response.json();
   assert.match(id, /^[a-f0-9]{40}$/);
+  assert.match(token, /^[a-f0-9]{64}$/);
   projectId ??= id;
+  projectToken ??= token;
   if (attempt === 1) console.log(`PASS 測試 token -> 200，id=${id}`);
 }
+
+const unauthorizedState = await fetch(`${BASE_URL}/api/projects/${projectId}`);
+assert.equal(unauthorizedState.status, 403);
+console.log("PASS 專案狀態缺少權杖 -> 403");
+
+const unauthorizedDelete = await fetch(`${BASE_URL}/api/projects/${projectId}`, {
+  method: "DELETE",
+});
+assert.equal(unauthorizedDelete.status, 403);
+console.log("PASS 專案刪除缺少權杖 -> 403");
 
 const oversizedSourceData = await fetch(
   `${BASE_URL}/api/projects/${projectId}/generate`,
   {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: projectHeaders(projectToken, true),
     body: JSON.stringify({ sourceData: "資".repeat(3001) }),
   },
 );
@@ -79,7 +99,7 @@ const fixture = `<!doctype html><html lang="zh-Hant-TW"><body>
 </body></html>`;
 const saveDeck = await fetch(`${BASE_URL}/api/projects/${projectId}/deck`, {
   method: "POST",
-  headers: { "content-type": "application/json" },
+  headers: projectHeaders(projectToken, true),
   body: JSON.stringify({ html: fixture }),
 });
 assert.equal(saveDeck.status, 200);
@@ -94,7 +114,7 @@ assert.equal(await deck.text(), fixture);
 const fixtureV2 = fixture.replace("第一頁", "新版第一頁");
 const saveDeckV2 = await fetch(`${BASE_URL}/api/projects/${projectId}/deck`, {
   method: "POST",
-  headers: { "content-type": "application/json" },
+  headers: projectHeaders(projectToken, true),
   body: JSON.stringify({ html: fixtureV2, origin: "mechfix" }),
 });
 assert.equal(saveDeckV2.status, 200);
@@ -104,7 +124,7 @@ const rollback = await fetch(
   `${BASE_URL}/api/projects/${projectId}/rollback`,
   {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: projectHeaders(projectToken, true),
     body: JSON.stringify({ version: 1 }),
   },
 );
@@ -121,7 +141,7 @@ const missingRollback = await fetch(
   `${BASE_URL}/api/projects/${projectId}/rollback`,
   {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: projectHeaders(projectToken, true),
     body: JSON.stringify({ version: 99 }),
   },
 );
@@ -129,7 +149,9 @@ assert.equal(missingRollback.status, 404);
 assert.deepEqual(await missingRollback.json(), { error: "找不到簡報版本" });
 console.log("PASS rollback v99 -> 404");
 
-const state = await fetch(`${BASE_URL}/api/projects/${projectId}`);
+const state = await fetch(`${BASE_URL}/api/projects/${projectId}`, {
+  headers: projectHeaders(projectToken),
+});
 assert.equal(state.status, 200);
 const project = await state.json();
 assert.equal(project.status, "ready");
@@ -145,7 +167,7 @@ const invalidImage = await fetch(
   `${BASE_URL}/api/projects/${projectId}/image`,
   {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: projectHeaders(projectToken, true),
     body: JSON.stringify({ prompt: "integration test", ar: "4:3" }),
   },
 );
@@ -156,12 +178,33 @@ const invalidRevise = await fetch(
   `${BASE_URL}/api/projects/${projectId}/revise`,
   {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: projectHeaders(projectToken, true),
     body: JSON.stringify({ message: "" }),
   },
 );
 assert.equal(invalidRevise.status, 400);
 console.log("PASS revise 輸入驗證不呼叫 MiniMax");
+
+const deleted = await fetch(`${BASE_URL}/api/projects/${projectId}`, {
+  method: "DELETE",
+  headers: projectHeaders(projectToken),
+});
+assert.equal(deleted.status, 200);
+assert.deepEqual(await deleted.json(), { deleted: true, cleanupPending: 0 });
+
+const deletedState = await fetch(`${BASE_URL}/api/projects/${projectId}`, {
+  headers: projectHeaders(projectToken),
+});
+assert.equal(deletedState.status, 404);
+
+const deletedDeck = await fetch(
+  `${BASE_URL}/api/projects/${projectId}/deck?version=1`,
+);
+assert.equal(deletedDeck.status, 404);
+
+const deletedPlayer = await fetch(`${BASE_URL}/p/${projectId}`);
+assert.equal(deletedPlayer.status, 404);
+console.log("PASS 專案刪除／D1 metadata 清理／公開讀取失效");
 console.log("TASK_2_INTEGRATION_PASS");
 console.log("TASK_3_API_CONTRACT_PASS");
 await import("./judge-mock.mjs");

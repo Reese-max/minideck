@@ -1,7 +1,9 @@
 import {
   checkAndIncrement,
+  hashProjectToken,
   ipHash,
   refund,
+  verifyProjectToken,
   verifyTurnstile,
 } from "./guard.js";
 import {
@@ -18,6 +20,7 @@ import {
   appendProjectMessage,
   assertD1Initialized,
   claimProject,
+  deleteProjectData,
   getProject,
   readDeck,
   readProjectState,
@@ -103,6 +106,26 @@ function projectId() {
   return crypto.randomUUID().replaceAll("-", "") + extraHex;
 }
 
+function projectToken() {
+  const bytes = crypto.getRandomValues(new Uint8Array(32));
+  return [...bytes]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+async function authorizeProject(request, env, id) {
+  const project = await getProject(env.DB, id);
+  if (!project) {
+    return { project: null, response: json({ error: "專案不存在" }, 404) };
+  }
+
+  const token = request.headers.get("X-Project-Token")?.trim();
+  if (!(await verifyProjectToken(token, project.access_token_hash))) {
+    return { project, response: json({ error: "專案權杖無效" }, 403) };
+  }
+  return { project, response: null };
+}
+
 async function createProject(request, env) {
   const body = await requestJson(request);
   if (!body) return json({ error: "請提供有效的 JSON 請求" }, 400);
@@ -153,11 +176,13 @@ async function createProject(request, env) {
   }
 
   const id = projectId();
+  const token = projectToken();
+  const tokenHash = await hashProjectToken(token);
   try {
     await env.DB.prepare(
-      "INSERT INTO projects(id, created_at, ip_hash, brief) VALUES(?1, ?2, ?3, ?4)",
+      "INSERT INTO projects(id, created_at, ip_hash, brief, access_token_hash) VALUES(?1, ?2, ?3, ?4, ?5)",
     )
-      .bind(id, Date.now(), hash, brief)
+      .bind(id, Date.now(), hash, brief, tokenHash)
       .run();
   } catch (error) {
     await Promise.allSettled([
@@ -167,7 +192,7 @@ async function createProject(request, env) {
     throw error;
   }
 
-  return json({ id });
+  return json({ id, token });
 }
 
 async function reserveText(env, id, reserveRevise) {
@@ -231,6 +256,9 @@ async function settleTextFailure(env, id, day, error, reviseReserved) {
 }
 
 async function generateDeck(request, env, ctx, id) {
+  const access = await authorizeProject(request, env, id);
+  if (access.response) return access.response;
+
   const body = await requestJson(request, {});
   if (!body) return json({ error: "請提供有效的 JSON 請求" }, 400);
   const style = body.style === undefined ? DEFAULT_STYLE : body.style;
@@ -247,7 +275,7 @@ async function generateDeck(request, env, ctx, id) {
   if (claimed === null) return json({ error: "專案不存在" }, 404);
   if (!claimed) return json({ error: "專案正在生成中" }, 409);
 
-  const project = await getProject(env.DB, id);
+  const project = access.project;
   const day = await reserveText(env, id, false);
   if (!day) {
     await releaseProject(env.DB, id);
@@ -265,6 +293,7 @@ async function generateDeck(request, env, ctx, id) {
     style,
     sourceData,
     ctx,
+    signal: request.signal,
     onComplete: async (html) => {
       const version = await saveDeckVersion(
         env.DB,
@@ -286,15 +315,32 @@ async function rollbackDeck(request, env, id) {
     return json({ error: "版本編號無效" }, 400);
   }
 
-  const result = await rollbackDeckVersion(
-    env.DB,
-    env.BUCKET,
-    id,
-    body.version,
-  );
-  if (!result.project) return json({ error: "專案不存在" }, 404);
-  if (!result.version) return json({ error: "找不到簡報版本" }, 404);
-  return json({ version: result.version });
+  const access = await authorizeProject(request, env, id);
+  if (access.response) return access.response;
+
+  const claimed = await claimProject(env.DB, id);
+  if (claimed === null) return json({ error: "專案不存在" }, 404);
+  if (!claimed) return json({ error: "專案正在生成中" }, 409);
+
+  try {
+    const result = await rollbackDeckVersion(
+      env.DB,
+      env.BUCKET,
+      id,
+      body.version,
+    );
+    if (!result.version) {
+      await releaseProject(env.DB, id);
+      return json(
+        { error: result.project ? "找不到簡報版本" : "專案不存在" },
+        404,
+      );
+    }
+    return json({ version: result.version });
+  } catch (error) {
+    await releaseProject(env.DB, id);
+    throw error;
+  }
 }
 
 async function judgeDeckVersion(request, env, id) {
@@ -303,6 +349,9 @@ async function judgeDeckVersion(request, env, id) {
   if (!Number.isInteger(body.version) || body.version < 1) {
     return json({ error: "版本編號無效" }, 400);
   }
+
+  const access = await authorizeProject(request, env, id);
+  if (access.response) return access.response;
 
   const source = await readDeck(env.DB, env.BUCKET, id, body.version);
   if (!source.project) return json({ error: "專案不存在" }, 404);
@@ -352,6 +401,9 @@ async function judgeDeckVersion(request, env, id) {
 }
 
 async function reviseDeck(request, env, ctx, id) {
+  const access = await authorizeProject(request, env, id);
+  if (access.response) return access.response;
+
   const body = await requestJson(request);
   if (!body) return json({ error: "請提供有效的 JSON 請求" }, 400);
   if (typeof body.message !== "string" || !body.message.trim()) {
@@ -385,6 +437,7 @@ async function reviseDeck(request, env, ctx, id) {
       },
     ],
     ctx,
+    signal: request.signal,
     onComplete: async (revisedHtml) => {
       const version = await saveDeckVersion(
         env.DB,
@@ -401,9 +454,8 @@ async function reviseDeck(request, env, ctx, id) {
 }
 
 async function generateProjectImage(request, env, id) {
-  if (!(await getProject(env.DB, id))) {
-    return json({ error: "專案不存在" }, 404);
-  }
+  const access = await authorizeProject(request, env, id);
+  if (access.response) return access.response;
 
   const body = await requestJson(request);
   if (!body) return json({ error: "請提供有效的 JSON 請求" }, 400);
@@ -440,6 +492,31 @@ async function generateProjectImage(request, env, id) {
     return json({ error: "今日額度已滿" }, 429);
   }
 
+  const projectReserved = await checkAndIncrement(
+    env.DB,
+    projectScope,
+    "all",
+    limit(env, "LIMIT_PROJECT_IMAGES"),
+  );
+  if (!projectReserved) return json({ error: "今日額度已滿" }, 429);
+
+  const globalReserved = await checkAndIncrement(
+    env.DB,
+    "global:images",
+    day,
+    limit(env, "LIMIT_GLOBAL_IMAGES"),
+  );
+  if (!globalReserved) {
+    await refund(env.DB, projectScope, "all");
+    return json({ error: "今日額度已滿" }, 429);
+  }
+
+  const releaseImageQuota = () =>
+    Promise.allSettled([
+      refund(env.DB, projectScope, "all"),
+      refund(env.DB, "global:images", day),
+    ]);
+
   let generated;
   try {
     generated = await generateImage(
@@ -449,42 +526,28 @@ async function generateProjectImage(request, env, id) {
       hash,
     );
   } catch (error) {
+    await releaseImageQuota();
     console.error("image_generation_error", error);
     return json({ error: "MiniMax 圖片生成失敗" }, 502);
   }
 
-  await env.BUCKET.put(key, generated.image, {
-    httpMetadata: { contentType: generated.contentType },
-  });
-  if (
-    !(await checkAndIncrement(
-      env.DB,
-      projectScope,
-      "all",
-      limit(env, "LIMIT_PROJECT_IMAGES"),
-    ))
-  ) {
-    return json({ error: "今日額度已滿" }, 429);
-  }
-  if (
-    !(await checkAndIncrement(
-      env.DB,
-      "global:images",
-      day,
-      limit(env, "LIMIT_GLOBAL_IMAGES"),
-    ))
-  ) {
-    await refund(env.DB, projectScope, "all");
-    return json({ error: "今日額度已滿" }, 429);
+  try {
+    await env.BUCKET.put(key, generated.image, {
+      httpMetadata: { contentType: generated.contentType },
+    });
+  } catch (error) {
+    await releaseImageQuota();
+    console.error("image_storage_error", error);
+    return json({ error: "圖片保存失敗" }, 502);
   }
 
   return json({ url: `/img/${hash}.jpg` });
 }
 
 async function saveDeck(request, env, id) {
-  if (!(await getProject(env.DB, id))) {
-    return json({ error: "專案不存在" }, 404);
-  }
+  const access = await authorizeProject(request, env, id);
+  if (access.response) return access.response;
+
   const body = await requestJson(request);
   if (!body) return json({ error: "請提供有效的 JSON 請求" }, 400);
   if (typeof body.html !== "string") {
@@ -502,14 +565,49 @@ async function saveDeck(request, env, id) {
     return json({ error: "HTML 簡報的圖片佔位符不可超過 12 個" }, 400);
   }
 
-  const version = await saveDeckVersion(
-    env.DB,
-    env.BUCKET,
-    id,
-    body.html,
-    typeof body.origin === "string" && body.origin ? body.origin : "imagefill",
-  );
-  return json({ version });
+  const claimed = await claimProject(env.DB, id);
+  if (claimed === null) return json({ error: "專案不存在" }, 404);
+  if (!claimed) return json({ error: "專案正在生成中" }, 409);
+
+  try {
+    const version = await saveDeckVersion(
+      env.DB,
+      env.BUCKET,
+      id,
+      body.html,
+      typeof body.origin === "string" && body.origin ? body.origin : "imagefill",
+    );
+    if (version === null) {
+      await releaseProject(env.DB, id);
+      return json({ error: "專案不存在" }, 404);
+    }
+    return json({ version });
+  } catch (error) {
+    await releaseProject(env.DB, id);
+    throw error;
+  }
+}
+
+async function deleteProject(request, env, id) {
+  const access = await authorizeProject(request, env, id);
+  if (access.response) return access.response;
+
+  const claimed = await claimProject(env.DB, id);
+  if (claimed === null) return json({ error: "專案不存在" }, 404);
+  if (!claimed) return json({ error: "專案正在生成中" }, 409);
+
+  try {
+    const result = await deleteProjectData(env.DB, env.BUCKET, id);
+    if (!result) return json({ error: "專案不存在" }, 404);
+    if (result.cleanupPending > 0) {
+      await releaseProject(env.DB, id);
+      return json({ deleted: false, cleanupPending: result.cleanupPending }, 503);
+    }
+    return json({ deleted: true, cleanupPending: result.cleanupPending });
+  } catch (error) {
+    await releaseProject(env.DB, id);
+    throw error;
+  }
 }
 
 async function getDeckResponse(env, id, versionText) {
@@ -606,7 +704,12 @@ export default {
       }
 
       const projectMatch = url.pathname.match(/^\/api\/projects\/([^/]+)$/);
+      if (projectMatch && request.method === "DELETE") {
+        return await deleteProject(request, env, projectMatch[1]);
+      }
       if (projectMatch && request.method === "GET") {
+        const access = await authorizeProject(request, env, projectMatch[1]);
+        if (access.response) return access.response;
         const state = await readProjectState(env.DB, projectMatch[1]);
         return state
           ? json(state)

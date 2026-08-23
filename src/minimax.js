@@ -188,6 +188,7 @@ export function streamDeck({
   style = DEFAULT_STYLE,
   sourceData = "",
   ctx,
+  signal,
   onComplete,
   onFailure,
 }) {
@@ -224,7 +225,9 @@ export function streamDeck({
             ...messages,
           ],
         }),
-        signal: AbortSignal.timeout(TEXT_TIMEOUT_MS),
+        signal: signal
+          ? AbortSignal.any([signal, AbortSignal.timeout(TEXT_TIMEOUT_MS)])
+          : AbortSignal.timeout(TEXT_TIMEOUT_MS),
       });
       if (!response.ok) throw await minimaxError(response, "text");
       if (!response.body) throw new Error("MiniMax 文字回應缺少串流內容");

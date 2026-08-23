@@ -4,6 +4,7 @@ CREATE TABLE projects(
   ip_hash TEXT,
   title TEXT,
   brief TEXT,
+  access_token_hash TEXT,
   current_version INTEGER DEFAULT 0,
   status TEXT DEFAULT 'new'
 );

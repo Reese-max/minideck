@@ -12,7 +12,7 @@ run_worker_first = ["/api/*", "/img/*", "/p/*"]
 [[d1_databases]]
 binding = "DB"
 database_name = "minideck"
-database_id = "local-dev-placeholder"
+database_id = "c993c83c-b343-48b6-9391-6a3cd99c5a00"
 
 [[r2_buckets]]
 binding = "BUCKET"

@@ -55,3 +55,22 @@ export async function ipHash(ip, salt) {
     .join("")
     .slice(0, 16);
 }
+
+export async function hashProjectToken(token) {
+  if (typeof token !== "string" || token.length < 32 || token.length > 128) {
+    return null;
+  }
+
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(token),
+  );
+  return [...new Uint8Array(digest)]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+export async function verifyProjectToken(token, expectedHash) {
+  if (typeof expectedHash !== "string" || !expectedHash) return false;
+  return (await hashProjectToken(token)) === expectedHash;
+}

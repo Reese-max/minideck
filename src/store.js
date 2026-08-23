@@ -33,7 +33,7 @@ export async function readQuotaCounts(db, entries) {
 export function getProject(db, id) {
   return db
     .prepare(
-      "SELECT id, brief, current_version, status FROM projects WHERE id = ?1",
+      "SELECT id, brief, access_token_hash, current_version, status FROM projects WHERE id = ?1",
     )
     .bind(id)
     .first();
@@ -102,11 +102,24 @@ export async function saveDeckVersion(db, bucket, id, html, origin, revision) {
     );
   }
 
-  await bucket.put(r2Key, html, {
-    httpMetadata: { contentType: "text/html; charset=utf-8" },
-  });
-  await db.batch(statements);
-  return version;
+  let uploaded = false;
+  try {
+    await bucket.put(r2Key, html, {
+      httpMetadata: { contentType: "text/html; charset=utf-8" },
+    });
+    uploaded = true;
+    await db.batch(statements);
+    return version;
+  } catch (error) {
+    if (uploaded) {
+      try {
+        await bucket.delete(r2Key);
+      } catch (cleanupError) {
+        console.error("deck_r2_cleanup_failed", r2Key, cleanupError);
+      }
+    }
+    throw error;
+  }
 }
 
 export async function readDeck(db, bucket, id, requestedVersion) {
@@ -154,6 +167,42 @@ export async function appendProjectMessage(db, id, role, content) {
     )
     .bind(id, role, content, Date.now())
     .run();
+}
+
+export async function deleteProjectData(db, bucket, id) {
+  const project = await getProject(db, id);
+  if (!project) return null;
+
+  const rows = await db
+    .prepare("SELECT r2_key FROM versions WHERE project_id = ?1")
+    .bind(id)
+    .all();
+  const keys = rows.results
+    .map((row) => row.r2_key)
+    .filter((key) => typeof key === "string" && key);
+
+  let cleanupPending = 0;
+  for (const key of keys) {
+    try {
+      await bucket.delete(key);
+    } catch (error) {
+      cleanupPending += 1;
+      console.error("project_r2_cleanup_failed", key, error);
+    }
+  }
+
+  // ponytail: D1 and R2 have no cross-service transaction; keep metadata retryable when R2 cleanup fails.
+  if (cleanupPending > 0) return { cleanupPending };
+
+  await db.batch([
+    db.prepare("DELETE FROM messages WHERE project_id = ?1").bind(id),
+    db.prepare("DELETE FROM versions WHERE project_id = ?1").bind(id),
+    db
+      .prepare("DELETE FROM quotas WHERE scope LIKE ?1")
+      .bind(`proj:${id}:%`),
+    db.prepare("DELETE FROM projects WHERE id = ?1").bind(id),
+  ]);
+  return { cleanupPending };
 }
 
 export async function readProjectState(db, id) {

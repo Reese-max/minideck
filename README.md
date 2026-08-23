@@ -8,13 +8,19 @@ Cloudflare Worker 上的 MiniMax HTML 簡報生成器。瀏覽器 UI 的建立�
 .\dev.cmd
 ```
 
+既有 Cloudflare D1 升級到 project token 權限欄位時，部署前先執行一次：
+
+```powershell
+npx wrangler d1 execute minideck --remote --file migrations/0001_project_access_token.sql
+```
+
 下列範例以 Git Bash／WSL 的 `curl` 語法表示：
 
 ```bash
 BASE=http://127.0.0.1:8787
 ```
 
-## 八個主要端點
+## 九個主要端點
 
 | # | 方法與路徑 | 用途 |
 |---:|---|---|
@@ -25,7 +31,8 @@ BASE=http://127.0.0.1:8787
 | 5 | `POST /api/projects/:id/revise` | 依指令修訂；回應為 SSE |
 | 6 | `POST /api/projects/:id/deck` | 儲存完整 HTML 為新版本 |
 | 7 | `GET /api/projects/:id` | 讀取狀態、版本與對話紀錄 |
-| 8 | `GET /p/:id` | 讀取最新版匿名播放頁 |
+| 8 | `DELETE /api/projects/:id` | 刪除專案 metadata、版本與專案額度 |
+| 9 | `GET /p/:id` | 讀取最新版匿名播放頁 |
 
 ### 1. 查額度
 
@@ -43,7 +50,10 @@ curl -sS "$BASE/api/projects" \
   --data '{"brief":"為產品團隊做一份 5 頁 AI 導入簡報","turnstileToken":"<TURNSTILE_TOKEN>"}'
 
 PROJECT_ID=<回應中的-id>
+PROJECT_TOKEN=<回應中的-token>
 ```
+
+`token` 只在建立專案時回傳；專案狀態與寫入操作都要以 `X-Project-Token` header 傳送。`/api/projects/:id/deck`、`/img/<hash8>.jpg` 與 `/p/:id` 是公開讀取資源。
 
 ### 3. 生成簡報
 
@@ -52,6 +62,7 @@ PROJECT_ID=<回應中的-id>
 ```bash
 curl -N "$BASE/api/projects/$PROJECT_ID/generate" \
   -H 'content-type: application/json' \
+  -H "X-Project-Token: $PROJECT_TOKEN" \
   --data '{"style":"consultant-dark"}'
 ```
 
@@ -62,6 +73,7 @@ curl -N "$BASE/api/projects/$PROJECT_ID/generate" \
 ```bash
 curl -sS "$BASE/api/projects/$PROJECT_ID/image" \
   -H 'content-type: application/json' \
+  -H "X-Project-Token: $PROJECT_TOKEN" \
   --data '{"prompt":"A clean enterprise AI workflow, editorial photography","ar":"16:9"}'
 ```
 
@@ -70,6 +82,7 @@ curl -sS "$BASE/api/projects/$PROJECT_ID/image" \
 ```bash
 curl -N "$BASE/api/projects/$PROJECT_ID/revise" \
   -H 'content-type: application/json' \
+  -H "X-Project-Token: $PROJECT_TOKEN" \
   --data '{"message":"第 2 頁標題更精簡，保留所有數據"}'
 ```
 
@@ -80,13 +93,15 @@ curl -N "$BASE/api/projects/$PROJECT_ID/revise" \
 ```bash
 curl -sS "$BASE/api/projects/$PROJECT_ID/deck" \
   -H 'content-type: application/json' \
+  -H "X-Project-Token: $PROJECT_TOKEN" \
   --data-binary @deck.json
 ```
 
 ### 7. 查專案狀態
 
 ```bash
-curl -sS "$BASE/api/projects/$PROJECT_ID"
+curl -sS "$BASE/api/projects/$PROJECT_ID" \
+  -H "X-Project-Token: $PROJECT_TOKEN"
 ```
 
 ### 8. 取得匿名播放頁
@@ -111,10 +126,18 @@ curl -sS "$BASE/api/projects/$PROJECT_ID/deck?version=1" -o v1.html
 ```bash
 curl -sS "$BASE/api/projects/$PROJECT_ID/rollback" \
   -H 'content-type: application/json' \
+  -H "X-Project-Token: $PROJECT_TOKEN" \
   --data '{"version":1}'
 ```
 
 `POST /api/projects/:id/image` 回傳的 `/img/<hash8>.jpg` 可直接以 `GET` 下載，回應帶一年 immutable cache。
+
+刪除專案時需傳送 `X-Project-Token`；若 R2 deck 物件清理失敗，回應會是 503 且 `deleted:false`，D1 metadata 會保留以便重試。共用的 `images/<hash8>.jpg` 圖片快取不會隨單一專案刪除。
+
+```bash
+curl -sS -X DELETE "$BASE/api/projects/$PROJECT_ID" \
+  -H "X-Project-Token: $PROJECT_TOKEN"
+```
 
 ## SSE 事件格式
 
@@ -140,9 +163,9 @@ HTTP 層錯誤一律為 `{"error":"<繁中文案>"}`，常見狀態碼為 403、
 | `ip:<ipHash>:projects` | 3 | UTC 每日；建立專案時 |
 | `global:projects` | 50 | UTC 每日；建立專案時 |
 | `global:text` | 300 | UTC 每日；generate／revise 成功預留，符合重試條件的失敗會退還 |
-| `global:images` | 250 | UTC 每日；新圖片驗證並存入 R2 後 |
+| `global:images` | 250 | UTC 每日；新圖片生成前預留，失敗時退還 |
 | `proj:<id>:revises` | 6 | 專案終身；revise |
-| `proj:<id>:images` | 15 | 專案終身；新圖片成功後 |
+| `proj:<id>:images` | 15 | 專案終身；新圖片生成前預留，失敗時退還 |
 | `proj:<id>:retries` | 2 | 專案終身；符合退額條件的文字失敗 |
 
 建立專案同時檢查 IP 與全站額度；第二項失敗時會退還第一項。圖片 hash 快取命中不扣任何額度。所有上限由 `wrangler.toml` 的 `LIMIT_*` 變數控制。

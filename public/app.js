@@ -3,6 +3,40 @@
 
   const MD = (globalThis.MD ??= {});
   const IMAGE_PATTERN = /<img\b(?:"[^"]*"|'[^']*'|[^'">])*>/gi;
+  const projectTokens = new Map();
+  const projectTokenStoragePrefix = "minideck:project-token:";
+
+  function rememberProjectToken(id, token) {
+    if (!id || typeof token !== "string" || !token) return;
+    projectTokens.set(id, token);
+    try {
+      globalThis.sessionStorage?.setItem(`${projectTokenStoragePrefix}${id}`, token);
+    } catch {
+      // 私密瀏覽模式可能禁止 sessionStorage；本頁記憶仍可用。
+    }
+  }
+
+  function projectTokenFor(id) {
+    if (!id) return "";
+    const memoryToken = projectTokens.get(id);
+    if (memoryToken) return memoryToken;
+    try {
+      const storedToken = globalThis.sessionStorage?.getItem(
+        `${projectTokenStoragePrefix}${id}`,
+      );
+      if (storedToken) projectTokens.set(id, storedToken);
+      return storedToken ?? "";
+    } catch {
+      return "";
+    }
+  }
+
+  function projectHeaders(id, json = false) {
+    const headers = json ? { "content-type": "application/json" } : {};
+    const token = projectTokenFor(id);
+    if (token) headers["X-Project-Token"] = token;
+    return headers;
+  }
 
   function attribute(tag, name) {
     return tag.match(new RegExp(`\\s${name}\\s*=\\s*(["'])([\\s\\S]*?)\\1`, "i"))?.[2] ?? null;
@@ -39,20 +73,20 @@
     }
   }
 
-  async function jsonRequest(path, body) {
+  async function jsonRequest(path, body, projectId) {
     const response = await fetch(path, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: projectHeaders(projectId, true),
       body: JSON.stringify(body),
     });
     if (!response.ok) throw await apiError(response);
     return response.json();
   }
 
-  async function streamAction(path, body, onToken) {
+  async function streamAction(path, body, onToken, projectId) {
     const response = await fetch(path, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: projectHeaders(projectId, true),
       body: JSON.stringify(body),
     });
     if (!response.ok) throw await apiError(response);
@@ -118,35 +152,41 @@
   }
 
   MD.api = {
-    createProject(brief, turnstileToken) {
-      return jsonRequest("/api/projects", { brief, turnstileToken });
+    async createProject(brief, turnstileToken) {
+      const result = await jsonRequest("/api/projects", { brief, turnstileToken });
+      rememberProjectToken(result.id, result.token);
+      return result;
     },
     generate(id, onToken, style = "consultant-dark", sourceData = "") {
       return streamAction(
         `/api/projects/${id}/generate`,
         { style, ...(sourceData ? { sourceData } : {}) },
         onToken,
+        id,
       );
     },
     revise(id, message, onToken) {
-      return streamAction(`/api/projects/${id}/revise`, { message }, onToken);
+      return streamAction(`/api/projects/${id}/revise`, { message }, onToken, id);
     },
     image(id, prompt, ar) {
-      return jsonRequest(`/api/projects/${id}/image`, { prompt, ar });
+      return jsonRequest(`/api/projects/${id}/image`, { prompt, ar }, id);
     },
     saveDeck(id, html, origin = "imagefill") {
-      return jsonRequest(`/api/projects/${id}/deck`, { html, origin });
+      return jsonRequest(`/api/projects/${id}/deck`, { html, origin }, id);
     },
     async getProject(id) {
-      const response = await fetch(`/api/projects/${id}`, { cache: "no-store" });
+      const response = await fetch(`/api/projects/${id}`, {
+        cache: "no-store",
+        headers: projectHeaders(id),
+      });
       if (!response.ok) throw await apiError(response);
       return response.json();
     },
     rollback(id, version) {
-      return jsonRequest(`/api/projects/${id}/rollback`, { version });
+      return jsonRequest(`/api/projects/${id}/rollback`, { version }, id);
     },
     judge(id, version) {
-      return jsonRequest(`/api/projects/${id}/judge`, { version });
+      return jsonRequest(`/api/projects/${id}/judge`, { version }, id);
     },
   };
 
