@@ -4,7 +4,8 @@
   "private": true,
   "description": "Cloudflare Worker scaffold for minideck",
   "scripts": {
-    "dev": "wrangler dev --port 8787"
+    "dev": "wrangler dev --port 8787",
+    "check": "echo 'No checks configured yet'"
   },
   "devDependencies": {
     "html-to-image": "^1.11.13",
