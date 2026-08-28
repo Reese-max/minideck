@@ -63,6 +63,7 @@ jobs:
               npm --prefix "$project" run props:safe -- --goal "$work/goal.json" --write
               npm --prefix "$project" run render:goal -- "$work/goal.json" "$work/deck/index.html"
               node /app/runner/deck-normalizer.mjs "$work/deck/index.html"
+              node /app/runner/inspect-dashi-bespoke.mjs "$work/deck/index.html" "$project"
               npm --prefix "$project" run validate:swiss -- "$work/deck/index.html"
               npm --prefix "$project" run validate:goal-copy -- "$work/goal.json" "$work/deck/index.html"
               npm --prefix "$project" run validate:four-variant-quality -- \
