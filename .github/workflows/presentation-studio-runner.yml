@@ -32,3 +32,46 @@ jobs:
       - run: cd workers/presentation-studio-runner && npx --no-install wrangler types
       - run: cd workers/presentation-studio-runner && npm run check
       - run: cd workers/presentation-studio-runner && npx --no-install wrangler deploy --dry-run
+
+  container-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Dashi runner image
+        run: docker build --platform linux/amd64 --tag presentation-studio-runner:test workers/presentation-studio-runner
+      - name: Render and export a Dashi fixture inside the image
+        run: |
+          set -eu
+          docker run --rm --platform linux/amd64 \
+            -v "$GITHUB_WORKSPACE/workers/presentation-studio-runner/test/fixtures:/tmp/fixtures:ro" \
+            presentation-studio-runner:test \
+            /bin/sh -eu -c '
+              project=/opt/skills/dashi-ppt/project
+              work=/tmp/dashi-smoke
+              mkdir -p "$work/deck" "$work/screenshots"
+              npm --prefix "$project" run goal:scaffold -- \
+                --title "Dashi container smoke" \
+                --goal "Verify the Dashi render and export path" \
+                --theme theme07 \
+                --pages 3 \
+                --content-briefs /tmp/fixtures/content-briefs.json \
+                --layout-variants 3 \
+                --seed ci-smoke \
+                --workflow-run-id ci-smoke \
+                --out "$work/goal.json"
+              npm --prefix "$project" run validate:goal-spec -- "$work/goal.json"
+              npm --prefix "$project" run props:safe -- --goal "$work/goal.json" --write
+              npm --prefix "$project" run render:goal -- "$work/goal.json" "$work/deck/index.html"
+              npm --prefix "$project" run validate:swiss -- "$work/deck/index.html"
+              npm --prefix "$project" run validate:goal-copy -- "$work/goal.json" "$work/deck/index.html"
+              npm --prefix "$project" run validate:four-variant-quality -- \
+                --deck "$work/deck/index.html" \
+                --goal "$work/goal.json" \
+                --out "$work/quality.json" \
+                --screenshots "$work/screenshots"
+              npm --prefix "$project" run export:pptx -- "$work/deck" "$work/deck.pptx"
+              npm --prefix "$project" run export:pdf -- "$work/deck" "$work/deck.pdf"
+              test -s "$work/deck/index.html"
+              test -s "$work/deck.pptx"
+              test -s "$work/deck.pdf"
+            '
