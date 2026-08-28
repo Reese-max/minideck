@@ -7,17 +7,21 @@ export const DECORATION_OVERFLOW_POLICY = "data-presentation-studio-decoration-o
 export async function normalizeIntentionalDecorationOverflow(deckFile) {
   const html = await readFile(deckFile, "utf8");
   if (html.includes(DECORATION_OVERFLOW_POLICY)) return false;
-  const decorationSelector = "#deck .bespoke-slide .bespoke-root > div[data-bespoke-theme-source] > div[aria-hidden=\"true\"][data-editable-skip=\"true\"]";
+  const themeRootSelector = "#deck .bespoke-slide .bespoke-root > div[data-bespoke-theme-source]";
+  const decorationSelector = `${themeRootSelector} > div[aria-hidden=\"true\"][data-editable-skip=\"true\"]`;
+  const selectors = [themeRootSelector, decorationSelector];
   const style = `<style id="${DECORATION_OVERFLOW_POLICY}">\n`
-    + `${decorationSelector} {\n`
+    + `${selectors.join(",\n")} {\n`
     + `  overflow: visible !important;\n`
     + `}\n</style>`;
   const script = `<script id="${DECORATION_OVERFLOW_POLICY}-runtime">\n`
     + `(() => {\n`
-    + `  const selector = ${JSON.stringify(decorationSelector)};\n`
+    + `  const selectors = ${JSON.stringify(selectors)};\n`
     + `  const normalize = () => {\n`
-    + `    for (const element of document.querySelectorAll(selector)) {\n`
-    + `      element.style.setProperty("overflow", "visible", "important");\n`
+    + `    for (const selector of selectors) {\n`
+    + `      for (const element of document.querySelectorAll(selector)) {\n`
+    + `        element.style.setProperty("overflow", "visible", "important");\n`
+    + `      }\n`
     + `    }\n`
     + `  };\n`
     + `  normalize();\n`
