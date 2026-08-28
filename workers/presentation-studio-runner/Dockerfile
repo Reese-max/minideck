@@ -1,4 +1,4 @@
-FROM --platform=linux/amd64 node:22-bookworm-slim
+FROM node:22-bookworm-slim
 
 ENV NODE_ENV=production \
     CHROME_PATH=/usr/bin/chromium \
@@ -18,7 +18,7 @@ RUN apt-get update \
 RUN npm install --global dashi-ppt-skill@0.4.11 \
     && dashi-ppt-skill --dir /opt/skills \
     && cd /opt/skills/dashi-ppt/project \
-    && npm ci --include=dev --omit=optional --ignore-scripts
+    && npm ci --include=dev --ignore-scripts
 
 WORKDIR /app
 COPY runner/ /app/runner/
