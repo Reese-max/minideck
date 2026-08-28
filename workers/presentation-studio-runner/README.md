@@ -38,7 +38,13 @@ planner fallback and the independent visual/factual Judges. The runner calls
 the existing OpenAI-compatible `cf-ai-router` endpoint; planner context and
 Judge claim context exclude records marked sensitive. Without that secret, a
 ChatGPT-first `slideSpec` still renders normally, while a project without a
-spec and every render without Judges fails closed for review.
+spec and a revision without a supplied `specPatch` fail closed. Every render
+without Judges is also held for review.
+
+When a revision contains only an instruction, the Runner's isolated revision
+planner can produce a validated, targeted patch if the router secret is set.
+It may touch only existing slide IDs and verified non-sensitive claim IDs;
+otherwise use `specPatch` from ChatGPT directly.
 
 For deployment, configure the shared `PRESENTATION_RUNNER_TOKEN` secret on
 both Workers. Configure `CF_AI_ROUTER_API_KEY` only on the runner; it is never

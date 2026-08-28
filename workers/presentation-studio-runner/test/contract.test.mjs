@@ -55,4 +55,6 @@ test("runs independent judges after Dashi and redacts sensitive claims", async (
   assert.match(judges, /everySlideScoreMin >= 80/);
   assert.match(judges, /JUDGES_NOT_CONFIGURED/);
   assert.match(await read("runner/execute-job.mjs"), /claimIntegrityCheck/);
+  assert.match(await read("src/reviser.ts"), /REVISION_OUTPUT_INVALID_SPEC_PATCH/);
+  assert.match(await read("src/workflow.ts"), /plan revision for job/);
 });

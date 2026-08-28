@@ -191,12 +191,19 @@ function claimBindings(spec: JsonObject | null): Array<{ slideId: string; claimI
   if (!spec || !Array.isArray(spec.slides)) return [];
   return spec.slides
     .filter((slide): slide is JsonObject => isObject(slide) && typeof slide.id === "string")
-    .map((slide) => ({
-      slideId: String(slide.id),
-      claimIds: Array.isArray(slide.claims)
-        ? slide.claims.filter((claimId): claimId is string => typeof claimId === "string").slice(0, 100)
-        : [],
-    }))
+    .map((slide) => {
+      const values = Array.isArray(slide.claims)
+        ? slide.claims
+        : Array.isArray(slide.sourceClaimIds)
+          ? slide.sourceClaimIds
+          : [];
+      return {
+        slideId: String(slide.id),
+        claimIds: values
+          .filter((claimId): claimId is string => typeof claimId === "string")
+          .slice(0, 100),
+      };
+    })
     .filter((binding) => binding.claimIds.length > 0);
 }
 

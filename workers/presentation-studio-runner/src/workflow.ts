@@ -6,7 +6,8 @@ import { loadJobInput } from "./input";
 import { DashiContainer } from "./container";
 import { runJudges } from "./judges";
 import { runPlanner } from "./planner";
-import type { DashiJobResult, RunnerEnv, WorkflowParams } from "./types";
+import { applyRevisionPatch, runRevisionPlanner } from "./reviser";
+import type { DashiJobInput, DashiJobResult, JsonObject, RunnerEnv, WorkflowParams } from "./types";
 
 const RETRIES = {
   limit: 2,
@@ -14,10 +15,14 @@ const RETRIES = {
   backoff: "exponential" as const,
 };
 
+function isObject(value: unknown): value is JsonObject {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
 export class PresentationWorkflow extends WorkflowEntrypoint<RunnerEnv, WorkflowParams> {
   async run(event: Readonly<WorkflowEvent<WorkflowParams>>, step: WorkflowStep): Promise<unknown> {
     const job = event.payload.job;
-    let result: DashiJobResult;
+    let result: DashiJobResult | null = null;
     try {
       if (job.type === "plan") {
         result = (await step.do(
@@ -26,29 +31,74 @@ export class PresentationWorkflow extends WorkflowEntrypoint<RunnerEnv, Workflow
           async () => runPlanner(this.env, job) as any,
         )) as DashiJobResult;
         return step.do(`complete planned job ${job.id}`, async () => {
-          return completeJob(this.env, job, result) as any;
+          return completeJob(this.env, job, result!) as any;
         });
       }
-      result = (await step.do(
-        `execute dashi job ${job.id}`,
-        { retries: RETRIES, timeout: "35 minutes" },
-        async () => {
-          const input = await loadJobInput(this.env, job);
-          const container = getContainer<DashiContainer>(
-            this.env.DASHI_CONTAINER,
-            `presentation-job-${job.id}`,
-          );
-          return container.runJob(input) as any;
-        },
-      )) as DashiJobResult;
+      let input = (await step.do(
+        `load dashi job ${job.id}`,
+        { retries: RETRIES, timeout: "5 minutes" },
+        async () => loadJobInput(this.env, job) as any,
+      )) as DashiJobInput;
+      if (job.type === "revision") {
+        const suppliedPatch = isObject(input.payload.specPatch) ? input.payload.specPatch : null;
+        if (suppliedPatch) {
+          const patchedInput = applyRevisionPatch(input, suppliedPatch);
+          if (!patchedInput) {
+            result = {
+              status: "blocked",
+              jobId: job.id,
+              error: "REVISION_SPEC_PATCH_INVALID_OR_SOURCE_SLIDE_IDS_MISSING",
+            };
+          } else {
+            input = patchedInput;
+          }
+        } else {
+          const revisionPlan = await step.do(
+            `plan revision for job ${job.id}`,
+            { retries: RETRIES, timeout: "10 minutes" },
+            async () => runRevisionPlanner(this.env, input) as any,
+          ) as Awaited<ReturnType<typeof runRevisionPlanner>>;
+          if (revisionPlan.status !== "succeeded" || !revisionPlan.specPatch) {
+            result = {
+              status: "blocked",
+              jobId: job.id,
+              error: revisionPlan.error || "REVISION_PLANNER_BLOCKED",
+            };
+          } else {
+            const patchedInput = applyRevisionPatch(input, revisionPlan.specPatch);
+            if (!patchedInput) {
+              result = {
+                status: "blocked",
+                jobId: job.id,
+                error: "REVISION_OUTPUT_INVALID_SPEC_PATCH",
+              };
+            } else {
+              input = patchedInput;
+            }
+          }
+        }
+      }
+      const executionInput = input;
+      if (!result) {
+        result = (await step.do(
+          `execute dashi job ${job.id}`,
+          { retries: RETRIES, timeout: "35 minutes" },
+          async () => {
+            const container = getContainer<DashiContainer>(
+              this.env.DASHI_CONTAINER,
+              `presentation-job-${job.id}`,
+            );
+            return container.runJob(executionInput) as any;
+          },
+        )) as DashiJobResult;
+      }
       if (result.status === "succeeded" && result.version) {
         const rendererResult = result;
         result = (await step.do(
           `judge dashi job ${job.id}`,
           { retries: RETRIES, timeout: "10 minutes" },
           async () => {
-            const input = await loadJobInput(this.env, job);
-            return runJudges(this.env, input, rendererResult) as any;
+            return runJudges(this.env, executionInput, rendererResult) as any;
           },
         )) as DashiJobResult;
       }
@@ -59,7 +109,7 @@ export class PresentationWorkflow extends WorkflowEntrypoint<RunnerEnv, Workflow
     }
 
     return step.do(`complete dashi job ${job.id}`, async () => {
-      return completeJob(this.env, job, result) as any;
+      return completeJob(this.env, job, result!) as any;
     });
   }
 }

@@ -197,7 +197,7 @@ async function prepareGoal(input, workDir) {
   const payload = isObject(input.payload) ? input.payload : {};
   let spec = isObject(input.spec) ? input.spec : null;
   const hasPatch = isObject(payload.specPatch);
-  if (input.type === "revision" && !hasPatch) {
+  if (input.type === "revision" && !hasPatch && !spec) {
     return { blocked: "REVISION_REQUIRES_SPEC_PATCH" };
   }
   if (spec && hasPatch) spec = patchSpec(spec, payload.specPatch);
@@ -248,6 +248,24 @@ async function prepareGoal(input, workDir) {
     ],
     workDir,
   );
+  if (result.exitCode === 0) {
+    const scaffolded = await readJson(goalPath);
+    if (Array.isArray(scaffolded.slides) && Array.isArray(spec.slides)) {
+      scaffolded.slides = scaffolded.slides.map((slide, index) => {
+        const authored = isObject(spec.slides[index]) ? spec.slides[index] : {};
+        const identity = safeText(authored.id, safeText(slide?.id, `s${String(index + 1).padStart(2, "0")}`));
+        const claims = Array.isArray(authored.claims)
+          ? authored.claims.filter((claimId) => typeof claimId === "string")
+          : [];
+        return {
+          ...slide,
+          id: identity,
+          ...(claims.length > 0 ? { claims, sourceClaimIds: claims } : {}),
+        };
+      });
+      await writeFile(goalPath, JSON.stringify(scaffolded, null, 2));
+    }
+  }
   return {
     goalPath,
     mode: "scaffolded",
@@ -326,12 +344,14 @@ function claimIntegrityCheck(input) {
   }
   const failures = [];
   for (const slide of Array.isArray(input?.spec?.slides) ? input.spec.slides : []) {
-    if (!isObject(slide) || slide.claims === undefined) continue;
-    if (!Array.isArray(slide.claims)) {
+    if (!isObject(slide)) continue;
+    const slideClaims = slide.claims === undefined ? slide.sourceClaimIds : slide.claims;
+    if (slideClaims === undefined) continue;
+    if (!Array.isArray(slideClaims)) {
       failures.push(`${safeText(slide.id, "slide")}: claims must be an array`);
       continue;
     }
-    for (const claimId of slide.claims) {
+    for (const claimId of slideClaims) {
       const claim = typeof claimId === "string" ? claims.get(claimId) : null;
       if (!claim) {
         failures.push(`${safeText(slide.id, "slide")}: unknown claim ${String(claimId)}`);
