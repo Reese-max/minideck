@@ -73,7 +73,7 @@ jobs:
               quality_status=$?
               set -e
               echo "Dashi four-variant quality report:"
-              node -e 'const r=require("/tmp/dashi-smoke/quality.json"); console.log(JSON.stringify({summary:r.summary,issues:r.issues},null,2))'
+              cat "$work/quality.json"
               test "$quality_status" -eq 0
               npm --prefix "$project" run export:pptx -- "$work/deck" "$work/deck.pptx"
               npm --prefix "$project" run export:pdf -- "$work/deck" "$work/deck.pdf"
