@@ -7,13 +7,26 @@ export const DECORATION_OVERFLOW_POLICY = "data-presentation-studio-decoration-o
 export async function normalizeIntentionalDecorationOverflow(deckFile) {
   const html = await readFile(deckFile, "utf8");
   if (html.includes(DECORATION_OVERFLOW_POLICY)) return false;
+  const decorationSelector = "#deck .bespoke-slide .bespoke-root > div[data-bespoke-theme-source] > div[aria-hidden=\"true\"][data-editable-skip=\"true\"]";
   const style = `<style id="${DECORATION_OVERFLOW_POLICY}">\n`
-    + `.bespoke-root div[aria-hidden="true"][data-editable-skip="true"] {\n`
+    + `${decorationSelector} {\n`
     + `  overflow: visible !important;\n`
     + `}\n</style>`;
+  const script = `<script id="${DECORATION_OVERFLOW_POLICY}-runtime">\n`
+    + `(() => {\n`
+    + `  const selector = ${JSON.stringify(decorationSelector)};\n`
+    + `  const normalize = () => {\n`
+    + `    for (const element of document.querySelectorAll(selector)) {\n`
+    + `      element.style.setProperty("overflow", "visible", "important");\n`
+    + `    }\n`
+    + `  };\n`
+    + `  normalize();\n`
+    + `  new MutationObserver(normalize).observe(document.documentElement, { childList: true, subtree: true });\n`
+    + `})();\n`
+    + `</script>`;
   const patched = /<\/head>/i.test(html)
-    ? html.replace(/<\/head>/i, `${style}</head>`)
-    : `${style}${html}`;
+    ? html.replace(/<\/head>/i, `${style}${script}</head>`)
+    : `${style}${script}${html}`;
   await writeFile(deckFile, patched);
   return true;
 }

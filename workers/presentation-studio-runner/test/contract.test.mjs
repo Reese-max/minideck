@@ -28,8 +28,10 @@ test("uses a fixed Dashi command and rejects shell execution", async () => {
   assert.doesNotMatch(source, /eval\s*\(/);
   const normalizer = await read("runner/deck-normalizer.mjs");
   assert.match(normalizer, /data-presentation-studio-decoration-overflow-policy/);
-  assert.match(normalizer, /data-editable-skip="true"/);
+  assert.match(normalizer, /data-bespoke-theme-source/);
+  assert.match(normalizer, /data-editable-skip/);
   assert.match(normalizer, /overflow: visible !important/);
+  assert.match(normalizer, /setProperty\("overflow", "visible", "important"\)/);
 });
 
 test("allows only fixed artifact kinds and derives R2 keys", async () => {
