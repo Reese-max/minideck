@@ -54,7 +54,8 @@ function corsHeaders(request: Request, env: Env): Headers {
   return headers;
 }
 
-function healthResponse(): Response {
+function healthResponse(env: Env): Response {
+  const runnerReady = env.PRESENTATION_RUNNER_STATUS === "configured";
   return Response.json(
     {
       status: "ok",
@@ -62,8 +63,8 @@ function healthResponse(): Response {
       openDesignEnabled: false,
       renderer: "dashi",
       tools: TOOL_COUNT,
-      phase: "A",
-      runner: "dashi-container-pending",
+      phase: runnerReady ? "B-ready" : "A",
+      runner: runnerReady ? "dashi-container-workflow" : "dashi-container-pending",
     },
     { headers: { "cache-control": "no-store" } },
   );
@@ -77,7 +78,7 @@ export default {
       if (oauthResponse) return oauthResponse;
 
       if (url.pathname === "/health" && request.method === "GET") {
-        return healthResponse();
+        return healthResponse(env);
       }
 
       const jobResponse = await handleJobApi(request, env);

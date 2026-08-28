@@ -1,10 +1,10 @@
-name: Deploy Presentation Studio MCP
+name: Deploy Presentation Studio Runner
 
 on:
   workflow_dispatch:
     inputs:
       target:
-        description: "Deploy a non-production version or production"
+        description: "Deploy a polling-disabled preview or production runner"
         required: true
         type: choice
         options:
@@ -29,10 +29,11 @@ jobs:
         with:
           node-version: "22"
           cache: npm
-          cache-dependency-path: workers/presentation-studio-mcp/package-lock.json
-      - run: cd workers/presentation-studio-mcp && npm ci
-      - run: cd workers/presentation-studio-mcp && npm run check
-      - run: cd workers/presentation-studio-mcp && npx --no-install wrangler deploy --dry-run
+          cache-dependency-path: workers/presentation-studio-runner/package-lock.json
+      - run: cd workers/presentation-studio-runner && npm ci
+      - run: cd workers/presentation-studio-runner && npx --no-install wrangler types
+      - run: cd workers/presentation-studio-runner && npm run check
+      - run: cd workers/presentation-studio-runner && npx --no-install wrangler deploy --dry-run
 
   deploy-preview:
     needs: check
@@ -44,8 +45,8 @@ jobs:
         with:
           node-version: "22"
           cache: npm
-          cache-dependency-path: workers/presentation-studio-mcp/package-lock.json
-      - run: cd workers/presentation-studio-mcp && npm ci
+          cache-dependency-path: workers/presentation-studio-runner/package-lock.json
+      - run: cd workers/presentation-studio-runner && npm ci
       - name: Refresh Cloudflare token
         id: cf_token
         env:
@@ -58,11 +59,21 @@ jobs:
           test -n "$token" && test "$token" != "null"
           echo "::add-mask::$token"
           echo "token=$token" >> "$GITHUB_OUTPUT"
-      - name: Upload preview version
+      - name: Deploy polling-disabled preview
         env:
           CLOUDFLARE_API_TOKEN: ${{ steps.cf_token.outputs.token }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: cd workers/presentation-studio-mcp && npx --no-install wrangler versions upload --var PRESENTATION_RUNNER_STATUS:pending
+          PRESENTATION_RUNNER_TOKEN: ${{ secrets.PRESENTATION_RUNNER_TOKEN }}
+          CF_AI_ROUTER_API_KEY: ${{ secrets.CF_AI_ROUTER_API_KEY }}
+        run: |
+          set -eu
+          test -n "$PRESENTATION_RUNNER_TOKEN"
+          cd workers/presentation-studio-runner
+          printf '%s' "$PRESENTATION_RUNNER_TOKEN" | npx --no-install wrangler secret put PRESENTATION_RUNNER_TOKEN --env preview
+          if [ -n "${CF_AI_ROUTER_API_KEY:-}" ]; then
+            printf '%s' "$CF_AI_ROUTER_API_KEY" | npx --no-install wrangler secret put CF_AI_ROUTER_API_KEY --env preview
+          fi
+          npx --no-install wrangler deploy --env preview
 
   deploy-production:
     needs: check
@@ -75,8 +86,8 @@ jobs:
         with:
           node-version: "22"
           cache: npm
-          cache-dependency-path: workers/presentation-studio-mcp/package-lock.json
-      - run: cd workers/presentation-studio-mcp && npm ci
+          cache-dependency-path: workers/presentation-studio-runner/package-lock.json
+      - run: cd workers/presentation-studio-runner && npm ci
       - name: Refresh Cloudflare token
         id: cf_token
         env:
@@ -89,14 +100,18 @@ jobs:
           test -n "$token" && test "$token" != "null"
           echo "::add-mask::$token"
           echo "token=$token" >> "$GITHUB_OUTPUT"
-      - name: Deploy production
+      - name: Deploy production container runner
         env:
           CLOUDFLARE_API_TOKEN: ${{ steps.cf_token.outputs.token }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           PRESENTATION_RUNNER_TOKEN: ${{ secrets.PRESENTATION_RUNNER_TOKEN }}
+          CF_AI_ROUTER_API_KEY: ${{ secrets.CF_AI_ROUTER_API_KEY }}
         run: |
           set -eu
           test -n "$PRESENTATION_RUNNER_TOKEN"
-          cd workers/presentation-studio-mcp
-          printf '%s' "$PRESENTATION_RUNNER_TOKEN" | npx --no-install wrangler secret put PRESENTATION_RUNNER_TOKEN
-          npx --no-install wrangler deploy --var PRESENTATION_RUNNER_STATUS:configured
+          cd workers/presentation-studio-runner
+          printf '%s' "$PRESENTATION_RUNNER_TOKEN" | npx --no-install wrangler secret put PRESENTATION_RUNNER_TOKEN --env production
+          if [ -n "${CF_AI_ROUTER_API_KEY:-}" ]; then
+            printf '%s' "$CF_AI_ROUTER_API_KEY" | npx --no-install wrangler secret put CF_AI_ROUTER_API_KEY --env production
+          fi
+          npx --no-install wrangler deploy --env production

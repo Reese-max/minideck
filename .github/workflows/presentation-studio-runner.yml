@@ -1,0 +1,34 @@
+name: Presentation Studio Runner
+
+on:
+  pull_request:
+    paths:
+      - "workers/presentation-studio-runner/**"
+      - "workers/presentation-studio-mcp/src/jobs.ts"
+      - "workers/presentation-studio-mcp/src/presentation.ts"
+      - ".github/workflows/presentation-studio-runner.yml"
+  push:
+    branches: [main]
+    paths:
+      - "workers/presentation-studio-runner/**"
+      - "workers/presentation-studio-mcp/src/jobs.ts"
+      - "workers/presentation-studio-mcp/src/presentation.ts"
+      - ".github/workflows/presentation-studio-runner.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: workers/presentation-studio-runner/package-lock.json
+      - run: cd workers/presentation-studio-runner && npm ci
+      - run: cd workers/presentation-studio-runner && npx --no-install wrangler types
+      - run: cd workers/presentation-studio-runner && npm run check
+      - run: cd workers/presentation-studio-runner && npx --no-install wrangler deploy --dry-run

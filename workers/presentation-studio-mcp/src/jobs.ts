@@ -131,7 +131,7 @@ async function claimJobs(request: Request, env: Env): Promise<Response> {
   for (const job of query.results) {
     const update = await env.DB.prepare(
       "UPDATE presentation_jobs SET status = 'running', attempt_count = attempt_count + 1, " +
-        "leased_until = datetime('now', '+10 minutes'), started_at = COALESCE(started_at, datetime('now')), " +
+        "leased_until = datetime('now', '+60 minutes'), started_at = COALESCE(started_at, datetime('now')), " +
         "updated_at = datetime('now') " +
         "WHERE id = ? AND status = 'queued' " +
         "AND (leased_until IS NULL OR leased_until <= datetime('now'))",
@@ -159,7 +159,7 @@ async function claimJobs(request: Request, env: Env): Promise<Response> {
 
   return jsonResponse({
     status: "ok",
-    leaseSeconds: 600,
+    leaseSeconds: 3600,
     jobs: claimed.results.map((job) => ({
       id: job.id,
       projectId: job.project_id,
@@ -243,6 +243,50 @@ async function completeRenderJob(
   const runtimeReport = isRecord(body.rendererReport) ? body.rendererReport : null;
   const changedSlidesJson = JSON.stringify(versionInput.changedSlides);
   const r2Prefix = projectPrefix(env, job.project_id);
+  const artifactRows: Array<{
+    id: string;
+    key: string;
+    kind: string;
+    mimeType: string;
+    size: number;
+    sha256: string | null;
+  }> = [];
+  if (body.artifacts !== undefined) {
+    if (!Array.isArray(body.artifacts) || body.artifacts.length > MAX_ARTIFACTS) {
+      throw new Error("invalid_render_artifacts");
+    }
+    const allowedMimeTypes = new Set([
+      "text/html",
+      "application/json",
+      "image/png",
+    ]);
+    for (const artifact of body.artifacts) {
+      if (!isRecord(artifact)) throw new Error("invalid_render_artifact");
+      const key = artifact.r2Key;
+      const kind = artifact.kind;
+      const mimeType = artifact.mimeType;
+      if (
+        typeof key !== "string" ||
+        !key.startsWith(r2Prefix + "jobs/" + job.id + "/") ||
+        typeof kind !== "string" ||
+        !/^[A-Za-z0-9_.:-]{1,64}$/.test(kind) ||
+        typeof mimeType !== "string" ||
+        !allowedMimeTypes.has(mimeType)
+      ) {
+        throw new Error("invalid_render_artifact_metadata");
+      }
+      const object = await env.BUCKET.head(key);
+      if (!object) throw new Error("render_artifact_not_found: " + kind);
+      artifactRows.push({
+        id: randomId(),
+        key,
+        kind,
+        mimeType,
+        size: object.size,
+        sha256: typeof artifact.sha256 === "string" ? artifact.sha256 : null,
+      });
+    }
+  }
   await env.DB.batch([
     env.DB.prepare(
       "INSERT INTO presentation_versions " +
@@ -269,6 +313,22 @@ async function completeRenderJob(
       runtimeReport ? JSON.stringify(runtimeReport) : null,
       r2Prefix,
     ),
+    ...artifactRows.map((artifact) =>
+      env.DB.prepare(
+        "INSERT INTO presentation_artifacts " +
+          "(id, project_id, version_id, kind, r2_key, mime_type, byte_size, sha256) " +
+          "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      ).bind(
+        artifact.id,
+        job.project_id,
+        versionId,
+        artifact.kind,
+        artifact.key,
+        artifact.mimeType,
+        artifact.size,
+        artifact.sha256,
+      ),
+    ),
     env.DB.prepare(
       "UPDATE presentation_jobs SET status = 'succeeded', leased_until = NULL, " +
         "finished_at = datetime('now'), updated_at = datetime('now'), last_error = NULL " +
@@ -289,6 +349,7 @@ async function completeRenderJob(
         jobType: job.job_type,
         versionId,
         versionNumber,
+        artifactCount: artifactRows.length,
         hardGatesPass: versionInput.hardGatesPass,
         score: versionInput.score,
       }),

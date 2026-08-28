@@ -1,6 +1,6 @@
 # Presentation Studio MCP Worker
 
-Phase A of Presentation Studio v2.0.0. This is a stateless remote MCP Worker
+The MCP boundary of Presentation Studio v2.0.0. This is a stateless remote MCP Worker
 with D1-backed project/job state and R2-backed source objects. It is the
 controlled boundary for ChatGPT; it does not execute Dashi or arbitrary
 Cloudflare operations in the request path.
@@ -24,24 +24,27 @@ source content, and claim-to-source mappings. The Worker stores source objects
 under a generated project prefix and only stores the corresponding metadata in
 D1.
 
-create_presentation, revision, and export operations create D1 jobs. Phase A
-does not render inline: a later Workflow/Container runner must claim these
-jobs, run Dashi, and write versions, audits, and artifacts back to D1/R2.
+create_presentation, revision, and export operations create D1 jobs. The
+separate presentation-studio-runner Worker claims these jobs through a private
+service binding, runs Dashi in a Cloudflare Container, and writes versions,
+audits, and artifacts back to D1/R2. The MCP Worker never renders inline.
 approve_presentation fails closed until the recorded audit satisfies the
 quality contract.
 
 The runner-only endpoints are POST /internal/jobs/claim and
 POST /internal/jobs/complete. They require the PRESENTATION_RUNNER_TOKEN
 Bearer secret and are not registered as MCP tools. Claim leases expire after
-10 minutes; completion accepts only constrained render/export result shapes.
+60 minutes so the Workflow/Container execution window cannot create duplicate
+work; completion accepts only constrained render/export result shapes.
 
 ## Local checks
 
 Run npm ci, npm run check, and npx wrangler deploy --dry-run from this
 directory.
 
-Set GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET, PRESENTATION_RUNNER_TOKEN, and
-(in production) MCP_PUBLIC_ORIGIN as Worker secrets/vars. OAuth uses
+Set GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET, and the shared
+PRESENTATION_RUNNER_TOKEN as Worker secrets; set (in production)
+MCP_PUBLIC_ORIGIN as a Worker variable. OAuth uses
 authorization code plus PKCE (S256), and the Worker stores only hashes of
 authorization codes and tokens.
 

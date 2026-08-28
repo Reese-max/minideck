@@ -60,3 +60,10 @@ test("keeps the D1 job API outside the public MCP tool contract", async () => {
   assert.match(jobs, /\/internal\/jobs\/complete/);
   assert.match(jobs, /PRESENTATION_RUNNER_TOKEN/);
 });
+
+test("does not approve a version before both independent judges complete", async () => {
+  const source = await read("src/presentation.ts");
+  assert.match(source, /visual_and_factual_judges_incomplete/);
+  assert.match(source, /audit\.visualJudgePass !== true/);
+  assert.match(source, /audit\.factualJudgePass !== true/);
+});

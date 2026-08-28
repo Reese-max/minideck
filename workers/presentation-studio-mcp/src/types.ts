@@ -8,6 +8,7 @@ export interface Env {
   MCP_ALLOWED_HOSTNAMES?: string;
   MCP_ALLOWED_ORIGINS?: string;
   PRESENTATION_RUNNER_TOKEN?: string;
+  PRESENTATION_RUNNER_STATUS?: string;
   GITHUB_CLIENT_ID?: string;
   GITHUB_CLIENT_SECRET?: string;
 }
@@ -165,6 +166,9 @@ export interface QualityPolicy {
 
 export interface AuditSummary {
   allHardGatesPass?: boolean;
+  judgesComplete?: boolean;
+  visualJudgePass?: boolean;
+  factualJudgePass?: boolean;
   totalScore?: number;
   everySlideScoreMin?: number;
   blockerCount?: number;

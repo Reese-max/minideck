@@ -534,6 +534,7 @@ async function createPresentation(
           workflowRunId,
           randomSeed: seed,
           specVersion: spec ? "2.0.0" : null,
+          parentVersionId: versionId,
           requestedFormats,
         }),
       ),
@@ -558,7 +559,9 @@ async function createPresentation(
     sourceCount: sources.length,
     claimCount: claims.length,
     sourceMapKey,
-    next: spec ? "get_presentation" : "submit slideSpec or wait for planner fallback",
+    next: spec
+      ? "get_presentation"
+      : "get_presentation; optional planner fallback requires CF_AI_ROUTER_API_KEY",
   };
 }
 
@@ -914,6 +917,13 @@ function approvalDecision(
   if (version.hard_gates_pass !== 1 || audit.allHardGatesPass !== true) {
     reasons.push("hard_gates_not_passed");
   }
+  if (
+    audit.judgesComplete !== true ||
+    audit.visualJudgePass !== true ||
+    audit.factualJudgePass !== true
+  ) {
+    reasons.push("visual_and_factual_judges_incomplete");
+  }
   if (score === undefined || score < Math.max(project.target_score, policy.targetScore)) {
     reasons.push("total_score_below_target");
   }
@@ -1045,7 +1055,7 @@ async function exportPresentation(
         jobId,
         status: "queued",
         renderer: "dashi",
-        containerRunner: "pending",
+        containerRunner: env.PRESENTATION_RUNNER_STATUS || "pending",
         formats: input.formats || ["pptx"],
         next: "get_presentation",
       };
@@ -1270,7 +1280,7 @@ export function registerPresentationTools(
     "export_presentation",
     {
       description:
-        "Queue Dashi HTML/PPTX/PDF export for an already approved version; this Phase A Worker does not render inline.",
+        "Queue Dashi HTML/PPTX/PDF export for an already approved version; the MCP Worker does not render inline.",
       inputSchema: exportInputSchema,
     },
     async (rawInput) => {

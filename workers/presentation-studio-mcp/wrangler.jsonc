@@ -21,6 +21,7 @@
   "vars": {
     "ARCHITECTURE_VERSION": "2.0.0",
     "DEFAULT_PROFILE_ID": "cpu-police-academic-v1",
-    "R2_PREFIX": "presentation-studio/"
+    "R2_PREFIX": "presentation-studio/",
+    "PRESENTATION_RUNNER_STATUS": "pending"
   }
 }
