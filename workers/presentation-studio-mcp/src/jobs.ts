@@ -476,4 +476,136 @@ async function completeExportJob(
     env.DB.prepare(
       "UPDATE presentation_jobs SET status = 'succeeded', leased_until = NULL, " +
         "finished_at = datetime('now'), updated_at = datetime('now'), last_error = NULL " +
-        "WHERE id = ? AND status = 'ru
+        "WHERE id = ? AND status = 'running'",
+    ).bind(job.id),
+    env.DB.prepare(
+      "UPDATE presentation_projects SET status = 'exported', updated_at = datetime('now') " +
+        "WHERE id = ?",
+    ).bind(job.project_id),
+    env.DB.prepare(
+      "INSERT INTO presentation_events " +
+        "(id, project_id, event_type, payload_json) VALUES (?, ?, 'job.completed', ?)",
+    ).bind(
+      randomId(),
+      job.project_id,
+      JSON.stringify({
+        jobId: job.id,
+        jobType: job.job_type,
+        versionId,
+        artifactCount: artifactRows.length,
+      }),
+    ),
+  );
+  await env.DB.batch(statements);
+  return { artifactIds: artifactRows.map((artifact) => artifact.id) };
+}
+
+async function completeTerminalJob(
+  env: Env,
+  job: JobRow,
+  status: "failed" | "blocked",
+  errorMessage: string,
+): Promise<void> {
+  const message = errorMessage.slice(0, MAX_ERROR_LENGTH);
+  await env.DB.batch([
+    env.DB.prepare(
+      "UPDATE presentation_jobs SET status = ?, leased_until = NULL, " +
+        "finished_at = datetime('now'), updated_at = datetime('now'), last_error = ? " +
+        "WHERE id = ? AND status = 'running'",
+    ).bind(status, message, job.id),
+    env.DB.prepare(
+      "UPDATE presentation_projects SET status = ?, updated_at = datetime('now') WHERE id = ?",
+    ).bind(status === "blocked" ? "blocked" : "failed", job.project_id),
+    env.DB.prepare(
+      "UPDATE presentation_project_runtime SET last_error = ?, blocked_reason = ? " +
+        "WHERE project_id = ?",
+    ).bind(message, status === "blocked" ? message : null, job.project_id),
+    env.DB.prepare(
+      "INSERT INTO presentation_events " +
+        "(id, project_id, event_type, payload_json) VALUES (?, ?, 'job.failed', ?)",
+    ).bind(
+      randomId(),
+      job.project_id,
+      JSON.stringify({ jobId: job.id, jobType: job.job_type, status, message }),
+    ),
+  ]);
+}
+
+async function completeJob(request: Request, env: Env): Promise<Response> {
+  const body = await readJson(request);
+  if (!body) return jsonResponse({ error: "invalid_complete_request" }, 400);
+  const jobId = body?.jobId;
+  const status = body?.status;
+  if (
+    !isUuid(jobId) ||
+    typeof status !== "string" ||
+    (status !== "succeeded" && status !== "failed" && status !== "blocked")
+  ) {
+    return jsonResponse({ error: "invalid_complete_request" }, 400);
+  }
+  const job = await env.DB.prepare(
+    "SELECT * FROM presentation_jobs WHERE id = ?",
+  )
+    .bind(jobId)
+    .first<JobRow>();
+  if (!job) return jsonResponse({ error: "job_not_found" }, 404);
+  if (job.status !== "running") {
+    return jsonResponse({ error: "job_not_running", status: job.status }, 409);
+  }
+  if (
+    !job.leased_until ||
+    new Date(job.leased_until).getTime() <= Date.now()
+  ) {
+    return jsonResponse({ error: "job_lease_expired" }, 409);
+  }
+
+  try {
+    if (status === "succeeded") {
+      if (job.job_type === "plan") {
+        const plan = await completePlanJob(env, job, body);
+        return jsonResponse({ status, jobId, ...plan });
+      }
+      if (job.job_type === "render" || job.job_type === "revision") {
+        const version = await completeRenderJob(env, job, body);
+        return jsonResponse({ status, jobId, ...version });
+      }
+      if (job.job_type === "export") {
+        const exportResult = await completeExportJob(env, job, body);
+        return jsonResponse({ status, jobId, ...exportResult });
+      }
+      await completeTerminalJob(env, job, "blocked", "planner_completion_not_supported");
+      return jsonResponse({ status: "blocked", jobId }, 409);
+    }
+
+    const errorMessage =
+      typeof body.error === "string" && body.error.trim()
+        ? body.error.trim()
+        : "runner_reported_" + status;
+    await completeTerminalJob(env, job, status, errorMessage);
+    return jsonResponse({ status, jobId });
+  } catch (error) {
+    return jsonResponse(
+      {
+        error: "job_completion_rejected",
+        message: error instanceof Error ? error.message : "unknown_error",
+      },
+      400,
+    );
+  }
+}
+
+export async function handleJobApi(
+  request: Request,
+  env: Env,
+): Promise<Response | null> {
+  const url = new URL(request.url);
+  if (!url.pathname.startsWith("/internal/jobs/")) return null;
+  if (!(await authenticateRunner(request, env))) return runnerUnauthorized();
+  if (url.pathname === "/internal/jobs/claim" && request.method === "POST") {
+    return claimJobs(request, env);
+  }
+  if (url.pathname === "/internal/jobs/complete" && request.method === "POST") {
+    return completeJob(request, env);
+  }
+  return jsonResponse({ error: "not_found" }, 404);
+}

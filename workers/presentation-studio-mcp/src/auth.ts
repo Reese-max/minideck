@@ -507,4 +507,75 @@ export async function authenticateMcpRequest(
 
   await env.DB.prepare(
     "UPDATE presentation_oauth_tokens SET last_used_at = datetime('now') " +
-      "WHERE access_token_ha
+      "WHERE access_token_hash = ?",
+  )
+    .bind(tokenHash)
+    .run();
+  let scopes: string[] = [];
+  try {
+    const parsed = JSON.parse(row.scopes_json) as unknown;
+    if (Array.isArray(parsed)) {
+      scopes = parsed.filter((scope): scope is string => typeof scope === "string");
+    }
+  } catch {
+    scopes = [];
+  }
+  return { ownerId: row.owner_login, scopes };
+}
+
+export function unauthorizedResponse(request: Request, env: Env): Response {
+  const origin = publicOrigin(request, env);
+  return new Response(JSON.stringify({ error: "unauthorized" }), {
+    status: 401,
+    headers: {
+      ...Object.fromEntries(noStoreHeaders()),
+      "www-authenticate":
+        'Bearer resource_metadata="' +
+        origin +
+        '/.well-known/oauth-protected-resource"',
+    },
+  });
+}
+
+export async function handleOAuthRequest(
+  request: Request,
+  env: Env,
+): Promise<Response | null> {
+  const path = new URL(request.url).pathname;
+  if (path === "/.well-known/oauth-protected-resource" && request.method === "GET") {
+    const origin = publicOrigin(request, env);
+    return jsonResponse({
+      resource: origin + "/mcp",
+      authorization_servers: [origin],
+      bearer_methods_supported: ["header"],
+      scopes_supported: DEFAULT_SCOPES,
+    });
+  }
+  if (path === "/.well-known/oauth-authorization-server" && request.method === "GET") {
+    const origin = publicOrigin(request, env);
+    return jsonResponse({
+      issuer: origin,
+      authorization_endpoint: origin + "/oauth/authorize",
+      token_endpoint: origin + "/oauth/token",
+      registration_endpoint: origin + "/oauth/register",
+      response_types_supported: ["code"],
+      grant_types_supported: ["authorization_code", "refresh_token"],
+      code_challenge_methods_supported: ["S256"],
+      token_endpoint_auth_methods_supported: ["none"],
+      scopes_supported: DEFAULT_SCOPES,
+    });
+  }
+  if (path === "/oauth/register" && request.method === "POST") {
+    return handleRegister(request, env);
+  }
+  if (path === "/oauth/authorize" && request.method === "GET") {
+    return handleAuthorize(request, env);
+  }
+  if (path === "/oauth/callback" && request.method === "GET") {
+    return handleCallback(request, env);
+  }
+  if (path === "/oauth/token" && request.method === "POST") {
+    return handleToken(request, env);
+  }
+  return null;
+}
