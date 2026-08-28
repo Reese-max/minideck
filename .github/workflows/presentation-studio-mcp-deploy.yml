@@ -23,9 +23,6 @@ permissions:
 jobs:
   check:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: workers/presentation-studio-mcp
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -33,17 +30,14 @@ jobs:
           node-version: "22"
           cache: npm
           cache-dependency-path: workers/presentation-studio-mcp/package-lock.json
-      - run: npm ci
-      - run: npm run check
-      - run: npx --no-install wrangler deploy --dry-run
+      - run: cd workers/presentation-studio-mcp && npm ci
+      - run: cd workers/presentation-studio-mcp && npm run check
+      - run: cd workers/presentation-studio-mcp && npx --no-install wrangler deploy --dry-run
 
   deploy-preview:
     needs: check
     if: inputs.target == 'preview'
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: workers/presentation-studio-mcp
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -51,7 +45,7 @@ jobs:
           node-version: "22"
           cache: npm
           cache-dependency-path: workers/presentation-studio-mcp/package-lock.json
-      - run: npm ci
+      - run: cd workers/presentation-studio-mcp && npm ci
       - name: Refresh Cloudflare token
         id: cf_token
         env:
@@ -68,16 +62,13 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ steps.cf_token.outputs.token }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: npx --no-install wrangler versions upload
+        run: cd workers/presentation-studio-mcp && npx --no-install wrangler versions upload
 
   deploy-production:
     needs: check
     if: inputs.target == 'production' && inputs.confirm_production == true
     runs-on: ubuntu-latest
     environment: production
-    defaults:
-      run:
-        working-directory: workers/presentation-studio-mcp
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -85,7 +76,7 @@ jobs:
           node-version: "22"
           cache: npm
           cache-dependency-path: workers/presentation-studio-mcp/package-lock.json
-      - run: npm ci
+      - run: cd workers/presentation-studio-mcp && npm ci
       - name: Refresh Cloudflare token
         id: cf_token
         env:
@@ -102,4 +93,4 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ steps.cf_token.outputs.token }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: npx --no-install wrangler deploy
+        run: cd workers/presentation-studio-mcp && npx --no-install wrangler deploy

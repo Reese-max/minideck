@@ -17,9 +17,6 @@ permissions:
 jobs:
   check:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: workers/presentation-studio-mcp
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -27,6 +24,6 @@ jobs:
           node-version: "22"
           cache: npm
           cache-dependency-path: workers/presentation-studio-mcp/package-lock.json
-      - run: npm ci
-      - run: npm run check
-      - run: npx wrangler deploy --dry-run
+      - run: cd workers/presentation-studio-mcp && npm ci
+      - run: cd workers/presentation-studio-mcp && npm run check
+      - run: cd workers/presentation-studio-mcp && npx --no-install wrangler deploy --dry-run
