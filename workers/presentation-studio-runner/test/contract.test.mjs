@@ -31,6 +31,7 @@ test("uses a fixed Dashi command and rejects shell execution", async () => {
   assert.match(normalizer, /data-bespoke-theme-source/);
   assert.match(normalizer, /data-editable-skip/);
   assert.match(normalizer, /overflow: visible !important/);
+  assert.match(normalizer, /clip-path: inset\(0\) !important/);
   assert.match(normalizer, /setProperty\("overflow", "visible", "important"\)/);
 });
 
