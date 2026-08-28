@@ -28,7 +28,7 @@ COPY container_src/ /app/container_src/
 # Chromium sandbox is usable in this mode and no --no-sandbox escape hatch is
 # needed in the render path.
 RUN useradd --create-home --shell /usr/sbin/nologin dashi \
-    && chown -R dashi:dashi /app
+    && chown -R dashi:dashi /opt/skills/dashi-ppt/project /app
 USER dashi
 
 EXPOSE 8080
