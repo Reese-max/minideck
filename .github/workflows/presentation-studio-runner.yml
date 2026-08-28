@@ -62,7 +62,7 @@ jobs:
               npm --prefix "$project" run validate:goal-spec -- "$work/goal.json"
               npm --prefix "$project" run props:safe -- --goal "$work/goal.json" --write
               npm --prefix "$project" run render:goal -- "$work/goal.json" "$work/deck/index.html"
-              DASHI_SMOKE_DECK="$work/deck/index.html" node --input-type=module -e "import { readFile, writeFile } from 'node:fs/promises'; const file = process.env.DASHI_SMOKE_DECK; const marker = 'data-presentation-studio-decoration-overflow-policy'; const html = await readFile(file, 'utf8'); if (!html.includes(marker)) { const style = '<style id=\"' + marker + '\">.bespoke-root div[aria-hidden=\"true\"][data-editable-skip=\"true\"]{overflow:visible!important}</style>'; const at = html.toLowerCase().lastIndexOf('</head>'); await writeFile(file, at >= 0 ? html.slice(0, at) + style + html.slice(at) : style + html); }"
+              node /app/runner/deck-normalizer.mjs "$work/deck/index.html"
               npm --prefix "$project" run validate:swiss -- "$work/deck/index.html"
               npm --prefix "$project" run validate:goal-copy -- "$work/goal.json" "$work/deck/index.html"
               npm --prefix "$project" run validate:four-variant-quality -- \

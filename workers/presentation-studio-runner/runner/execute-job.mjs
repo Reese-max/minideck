@@ -3,6 +3,7 @@ import { createRequire } from "node:module";
 import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { normalizeIntentionalDecorationOverflow } from "./deck-normalizer.mjs";
 
 const MAX_INPUT_BYTES = 40 * 1024 * 1024;
 const MAX_COMMAND_OUTPUT = 4 * 1024 * 1024;
@@ -10,7 +11,6 @@ const DURATION_MS = 30 * 60 * 1000;
 const STORAGE_HOST = process.env.DASHI_STORAGE_HOST || "presentation-studio.internal";
 const DashiRoot = process.env.DASHI_ROOT || "/opt/skills/dashi-ppt";
 const DashiProject = join(DashiRoot, "project");
-const DECORATION_OVERFLOW_POLICY = "data-presentation-studio-decoration-overflow-policy";
 
 function isObject(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -334,19 +334,6 @@ async function runDashi(goalPath, workDir) {
     quality = { parseError: true };
   }
   return { deckDir, qualityPath, quality, commands };
-}
-
-async function normalizeIntentionalDecorationOverflow(deckFile) {
-  const html = await readFile(deckFile, "utf8");
-  if (html.includes(DECORATION_OVERFLOW_POLICY)) return;
-  const style = `<style id="${DECORATION_OVERFLOW_POLICY}">\n`
-    + `.bespoke-root div[aria-hidden="true"][data-editable-skip="true"] {\n`
-    + `  overflow: visible !important;\n`
-    + `}\n</style>`;
-  const patched = /<\/head>/i.test(html)
-    ? html.replace(/<\/head>/i, `${style}</head>`)
-    : `${style}${html}`;
-  await writeFile(deckFile, patched);
 }
 
 function commandPass(command) {
