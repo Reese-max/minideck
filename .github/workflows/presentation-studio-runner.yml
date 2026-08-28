@@ -69,7 +69,10 @@ jobs:
                 --deck "$work/deck/index.html" \
                 --goal "$work/goal.json" \
                 --out "$work/quality.json" \
-                --screenshots "$work/screenshots"
+                --screenshots "$work/screenshots" || {
+                  node --input-type=module -e "import fs from \"node:fs\"; const report = JSON.parse(fs.readFileSync(\"$work/quality.json\", \"utf8\")); console.log(JSON.stringify({ issues: report.issues, groups: report.groups }, null, 2));"
+                  exit 1
+                }
               npm --prefix "$project" run export:pptx -- "$work/deck" "$work/deck.pptx"
               npm --prefix "$project" run export:pdf -- "$work/deck" "$work/deck.pdf"
               test -s "$work/deck/index.html"
