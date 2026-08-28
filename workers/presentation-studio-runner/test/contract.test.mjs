@@ -26,6 +26,8 @@ test("uses a fixed Dashi command and rejects shell execution", async () => {
   assert.match(container, /\["node", "\/app\/runner\/execute-job\.mjs"\]/);
   assert.doesNotMatch(source, /exec\(.*input\.(command|cmd|shell)/s);
   assert.doesNotMatch(source, /eval\s*\(/);
+  assert.match(source, /data-presentation-studio-decoration-overflow-policy/);
+  assert.match(source, /data-editable-skip="true"/);
 });
 
 test("allows only fixed artifact kinds and derives R2 keys", async () => {

@@ -64,17 +64,11 @@ jobs:
               npm --prefix "$project" run render:goal -- "$work/goal.json" "$work/deck/index.html"
               npm --prefix "$project" run validate:swiss -- "$work/deck/index.html"
               npm --prefix "$project" run validate:goal-copy -- "$work/goal.json" "$work/deck/index.html"
-              set +e
               npm --prefix "$project" run validate:four-variant-quality -- \
                 --deck "$work/deck/index.html" \
                 --goal "$work/goal.json" \
                 --out "$work/quality.json" \
                 --screenshots "$work/screenshots"
-              quality_status=$?
-              set -e
-              echo "Dashi four-variant quality report:"
-              cat "$work/quality.json"
-              test "$quality_status" -eq 0
               npm --prefix "$project" run export:pptx -- "$work/deck" "$work/deck.pptx"
               npm --prefix "$project" run export:pdf -- "$work/deck" "$work/deck.pdf"
               test -s "$work/deck/index.html"
