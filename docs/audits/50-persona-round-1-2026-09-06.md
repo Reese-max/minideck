@@ -35,3 +35,31 @@ No new reproducible P0/P1/P2 finding was confirmed from the static evidence revi
 ## Runtime status
 
 Current-main CI is real execution evidence. Provider, Cloudflare storage and browser paths were not executed in this Round 1.
+
+---
+
+# Round 2 continuation — 2026-09-06
+
+> Repository/static review only. No new browser, provider, Cloudflare runtime, or live exploitation claim is made here.
+
+## Result
+
+Status: **NOT CLEAN — NEW P2**
+
+### P2 — a normal share capability also exposes historical deck versions
+
+The product UI copies `/p/<projectId>` as the Share URL and the player resolves the latest deck. However `GET /api/projects/<projectId>/deck?version=N` is anonymous and does not call `authorizeProject()`. The README explicitly documents raw version retrieval as a public read resource.
+
+Because the share recipient necessarily learns the same high-entropy project ID, they can derive `?version=1`, `?version=2`, and so on. This is not an ID-guessing finding; it is a capability-scope finding: a user who removes sensitive, incorrect, or draft material in a later version can still disclose that earlier material when sharing the project ID.
+
+Tracking: `#2 — [P2][50-persona audit] Do not expose historical deck versions through a shared project ID`.
+
+Affected fixed personas: B03, C04, D05, I02, J04.
+
+## Regression requirement
+
+Create v1 containing a sentinel such as `DRAFT_SECRET`, create v2 without it, copy the normal `/p/<id>` Share URL, then act as an unrelated anonymous recipient. The recipient may view the intended shared deck but must not be able to recover `DRAFT_SECRET` through a historical version URL unless historical sharing was explicitly enabled.
+
+## Updated CLEAN gate
+
+In addition to the Round 1 runtime requirements, issue #2 must be resolved or explicitly justified `not_planned`; after the fix, rerun the same fixed personas and require two consecutive rounds with no new P0/P1/P2 before CLEAN.
