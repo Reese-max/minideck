@@ -683,6 +683,8 @@ export default {
 
       const deckMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/deck$/);
       if (deckMatch && request.method === "GET") {
+        const access = await authorizeProject(request, env, deckMatch[1]);
+        if (access.response) return access.response;
         return await getDeckResponse(env, deckMatch[1], url.searchParams.get("version"));
       }
       if (deckMatch && request.method === "POST") {
