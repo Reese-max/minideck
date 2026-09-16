@@ -33,7 +33,7 @@ export async function readQuotaCounts(db, entries) {
 export function getProject(db, id) {
   return db
     .prepare(
-      "SELECT id, brief, access_token_hash, current_version, status FROM projects WHERE id = ?1",
+      "SELECT id, brief, access_token_hash, current_version, published_version, published_at, status FROM projects WHERE id = ?1",
     )
     .bind(id)
     .first();
@@ -158,6 +158,42 @@ export async function rollbackDeckVersion(db, bucket, id, sourceVersion) {
   return { project: source.project, version };
 }
 
+export async function publishDeckVersion(db, id, version) {
+  const project = await getProject(db, id);
+  if (!project) return { project: null, published: null };
+
+  // 單一條件式 UPDATE：EXISTS 在執行時驗證版本仍存在，
+  // 避免「檢查後寫入」之間版本被刪除而把 public head 指向不存在的版本。
+  const now = Date.now();
+  const result = await db
+    .prepare(
+      `UPDATE projects SET published_version = ?2, published_at = ?3
+       WHERE id = ?1 AND EXISTS(
+         SELECT 1 FROM versions WHERE project_id = ?1 AND version = ?2)`,
+    )
+    .bind(id, version, now)
+    .run();
+  if (Number(result.meta?.changes ?? 0) === 0) {
+    return { project, published: null };
+  }
+  return {
+    project,
+    published: { published_version: version, published_at: now },
+  };
+}
+
+export async function unpublishDeckVersion(db, id) {
+  const project = await getProject(db, id);
+  if (!project) return null;
+  await db
+    .prepare(
+      "UPDATE projects SET published_version = NULL, published_at = NULL WHERE id = ?1",
+    )
+    .bind(id)
+    .run();
+  return project;
+}
+
 export async function appendProjectMessage(db, id, role, content) {
   await db
     .prepare(
@@ -224,6 +260,13 @@ export async function readProjectState(db, id) {
 
   return {
     status: project.status,
+    current_version: Number(project.current_version ?? 0),
+    published_version:
+      project.published_version === null ||
+      project.published_version === undefined
+        ? null
+        : Number(project.published_version),
+    published_at: project.published_at ?? null,
     versions: versions.results,
     messages: messages.results,
   };

@@ -5,6 +5,10 @@ on:
     branches: [main, production]
   push:
     branches: [main]
+  # 手動觸發：private repo 的 GitHub-hosted runner 因帳號額度被 admission
+  # 拒絕時，maintainer 可在額度恢復後用 workflow_dispatch 補跑同一條 gate，
+  # 或以 self-hosted runner 執行（見 docs/ci-admission.md）。
+  workflow_dispatch:
 
 jobs:
   check:
