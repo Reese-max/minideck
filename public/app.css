@@ -1008,6 +1008,17 @@ a:focus-visible {
   font-size: 0.7rem;
 }
 
+.version-status {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.7rem;
+}
+
+.version-publish {
+  min-height: 32px;
+  flex: 0 0 auto;
+}
+
 .version-rows {
   display: grid;
   gap: 9px;
