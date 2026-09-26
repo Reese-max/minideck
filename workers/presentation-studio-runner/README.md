@@ -54,3 +54,9 @@ The Dashi render result is passed to two separate Judge calls. A technically
 rendered deck is reviewable, but cannot be approved or exported until both
 independent Judge results are present, pass, and are recorded in the audit
 contract.
+
+The runner checks claim bindings and literal sensitive claim text before it
+starts Dashi or sends revision and Judge prompts. Unknown or sensitive bindings
+block the job with a generic error. Sensitive claim text is also removed from
+the source map copied into the Dashi container. A second check on generated
+goal and HTML content runs before artifact upload.

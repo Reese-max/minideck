@@ -1,4 +1,5 @@
 import { base64FromBytes, sha256Hex } from "./crypto";
+import { checkJudgeBoundary } from "../runner/claim-boundary.mjs";
 import type { DashiAudit, DashiJobInput, DashiJobResult, JsonObject, RunnerEnv } from "./types";
 
 const MAX_JUDGE_PROMPT_CHARS = 120_000;
@@ -233,6 +234,9 @@ export async function runJudges(
 ): Promise<DashiJobResult> {
   if (!result.version) return result;
   const audit = result.version.audit;
+  if (!checkJudgeBoundary(input, result).pass) {
+    return { status: "blocked", jobId: input.jobId, error: "CLAIM_BOUNDARY_BLOCKED" };
+  }
   if (!env.CF_AI_ROUTER_URL?.trim() || !env.CF_AI_ROUTER_API_KEY?.trim()) {
     return blockedJudgeResult(env, input, result, audit, "JUDGES_NOT_CONFIGURED");
   }
