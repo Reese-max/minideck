@@ -409,7 +409,7 @@ function makeAudit(renderResult, input, exportPass = undefined) {
 }
 
 async function upload(input, kind, bytes, contentType) {
-  const response = await fetch(`http://${STORAGE_HOST}/storage/${input.jobId}/${kind}`, {
+  const response = await fetch(`http://${STORAGE_HOST}/storage/${input.jobId}/${input.attemptCount}/${kind}`, {
     method: "PUT",
     headers: { "content-type": contentType, "content-length": String(bytes.byteLength) },
     body: bytes,

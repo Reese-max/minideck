@@ -1,4 +1,8 @@
 import { isSafeKind, isUuid, jsonResponse, sha256Hex } from "./crypto";
+import {
+  CURRENT_STORAGE_ATTEMPT_SQL,
+  buildAttemptScopedArtifactKey,
+} from "./storage-lease.mjs";
 import type { RunnerEnv } from "./types";
 
 const MAX_ARTIFACT_BYTES = 64 * 1024 * 1024;
@@ -25,11 +29,14 @@ function projectPrefix(env: Env, projectId: string): string {
   return `${prefix}projects/${projectId}/`;
 }
 
-function isRunningJobId(env: RunnerEnv, jobId: string): Promise<{ project_id: string } | null> {
-  return env.DB.prepare(
-    "SELECT project_id FROM presentation_jobs " +
-      "WHERE id = ? AND status = 'running' AND leased_until > datetime('now')",
-  ).bind(jobId).first<{ project_id: string }>();
+function isRunningJobId(
+  env: RunnerEnv,
+  jobId: string,
+  attemptCount: number,
+): Promise<{ project_id: string } | null> {
+  return env.DB.prepare(CURRENT_STORAGE_ATTEMPT_SQL)
+    .bind(jobId, attemptCount)
+    .first<{ project_id: string }>();
 }
 
 /**
@@ -39,15 +46,22 @@ function isRunningJobId(env: RunnerEnv, jobId: string): Promise<{ project_id: st
 export async function handleContainerStorage(request: Request, env: RunnerEnv): Promise<Response> {
   const url = new URL(request.url);
   const segments = url.pathname.split("/").filter(Boolean);
-  if (segments.length !== 3 || segments[0] !== "storage") {
+  if (segments.length !== 4 || segments[0] !== "storage") {
     return jsonResponse({ error: "storage_route_not_found" }, 404);
   }
   if (request.method !== "PUT") return jsonResponse({ error: "storage_method_not_allowed" }, 405);
-  const [, jobId, kind] = segments;
-  if (!isUuid(jobId) || !isSafeKind(kind) || !ARTIFACTS[kind]) {
+  const [, jobId, rawAttemptCount, kind] = segments;
+  const attemptCount = Number(rawAttemptCount);
+  if (
+    !isUuid(jobId) ||
+    !/^[1-9]\d*$/.test(rawAttemptCount) ||
+    !Number.isSafeInteger(attemptCount) ||
+    !isSafeKind(kind) ||
+    !ARTIFACTS[kind]
+  ) {
     return jsonResponse({ error: "storage_artifact_not_allowed" }, 400);
   }
-  const job = await isRunningJobId(env, jobId);
+  const job = await isRunningJobId(env, jobId, attemptCount);
   if (!job) return jsonResponse({ error: "storage_job_not_running" }, 409);
 
   const lengthHeader = request.headers.get("content-length");
@@ -63,11 +77,16 @@ export async function handleContainerStorage(request: Request, env: RunnerEnv): 
   }
 
   const descriptor = ARTIFACTS[kind];
-  const r2Key = `${projectPrefix(env, job.project_id)}jobs/${jobId}/${descriptor.fileName}`;
+  const r2Key = buildAttemptScopedArtifactKey(
+    projectPrefix(env, job.project_id),
+    jobId,
+    attemptCount,
+    descriptor.fileName,
+  );
   const digest = await sha256Hex(bytes);
   await env.BUCKET.put(r2Key, bytes, {
     httpMetadata: { contentType: descriptor.mimeType },
-    customMetadata: { jobId, kind, sha256: digest },
+    customMetadata: { jobId, attemptCount: String(attemptCount), kind, sha256: digest },
   });
   return jsonResponse({
     kind,

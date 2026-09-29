@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
+import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
+import {
+  CURRENT_STORAGE_ATTEMPT_SQL,
+  buildAttemptScopedArtifactKey,
+} from "../src/storage-lease.mjs";
 
 const root = new URL("../", import.meta.url);
 
@@ -40,8 +45,7 @@ test("allows only fixed artifact kinds and derives R2 keys", async () => {
   for (const kind of ["goal", "html", "audit", "quality", "preview", "pptx", "pdf"]) {
     assert.match(source, new RegExp(`${kind}:`));
   }
-  assert.match(source, /jobs\/\$\{jobId\}/);
-  assert.match(source, /status = 'running'/);
+  assert.match(source, /buildAttemptScopedArtifactKey\(/);
   assert.doesNotMatch(source, /artifact\.r2Key/);
 });
 
@@ -71,4 +75,56 @@ test("completion and workflow-failure reports carry the claim attempt fence", as
   const source = await read("src/mcp-service.ts");
   assert.equal([...source.matchAll(/attemptCount: job\.attemptCount/g)].length, 2);
   assert.match(source, /typeof value\.attemptCount === "number"/);
+});
+
+test("a stale attempt cannot overwrite the current attempt's R2 artifact", async () => {
+  const database = new DatabaseSync(":memory:");
+  try {
+    database.exec(
+      "CREATE TABLE presentation_jobs (" +
+        "id TEXT PRIMARY KEY, project_id TEXT NOT NULL, status TEXT NOT NULL, " +
+        "attempt_count INTEGER NOT NULL, leased_until TEXT NOT NULL);" +
+      "INSERT INTO presentation_jobs " +
+        "(id, project_id, status, attempt_count, leased_until) " +
+        "VALUES ('job-1', 'project-1', 'running', 2, datetime('now', '+10 minutes'))",
+    );
+
+    assert.equal(
+      database.prepare(CURRENT_STORAGE_ATTEMPT_SQL).get("job-1", 1),
+      undefined,
+      "the previous attempt must fail the current lease check",
+    );
+    assert.equal(
+      database.prepare(CURRENT_STORAGE_ATTEMPT_SQL).get("job-1", 2).project_id,
+      "project-1",
+    );
+
+    const previousAttemptKey = buildAttemptScopedArtifactKey(
+      "presentation-studio/projects/project-1/",
+      "job-1",
+      1,
+      "index.html",
+    );
+    const currentAttemptKey = buildAttemptScopedArtifactKey(
+      "presentation-studio/projects/project-1/",
+      "job-1",
+      2,
+      "index.html",
+    );
+    assert.notEqual(previousAttemptKey, currentAttemptKey);
+    assert.equal(
+      currentAttemptKey,
+      "presentation-studio/projects/project-1/jobs/job-1/attempt-2/index.html",
+    );
+
+    const storage = await read("src/storage.ts");
+    const input = await read("src/input.ts");
+    const runner = await read("runner/execute-job.mjs");
+    assert.match(storage, /CURRENT_STORAGE_ATTEMPT_SQL/);
+    assert.match(storage, /buildAttemptScopedArtifactKey\(/);
+    assert.match(input, /attemptCount:\s*job\.attemptCount/);
+    assert.match(runner, /storage\/\$\{input\.jobId\}\/\$\{input\.attemptCount\}\/\$\{kind\}/);
+  } finally {
+    database.close();
+  }
 });

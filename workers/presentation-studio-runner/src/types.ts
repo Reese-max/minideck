@@ -35,6 +35,7 @@ export interface ProfileInput {
 
 export interface DashiJobInput {
   jobId: string;
+  attemptCount: number;
   projectId: string;
   type: JobType;
   title: string;
