@@ -47,6 +47,8 @@ export async function claimJobs(
     const value = job as Record<string, unknown>;
     return (
       typeof value.id === "string" &&
+      typeof value.attemptCount === "number" &&
+      Number.isInteger(value.attemptCount) &&
       typeof value.projectId === "string" &&
       typeof value.type === "string" &&
       ["plan", "render", "revision", "export"].includes(value.type) &&
@@ -64,6 +66,7 @@ export async function completeJob(
 ): Promise<JsonObject> {
   const body: JsonObject = {
     jobId: job.id,
+    attemptCount: job.attemptCount,
     status: result.status,
   };
   if (result.status === "succeeded") {
@@ -91,6 +94,7 @@ export async function completeFailure(
   const message = error instanceof Error ? error.message : "runner_failed";
   return callMcpService(env, "/internal/jobs/complete", {
     jobId: job.id,
+    attemptCount: job.attemptCount,
     status: "failed",
     error: message.slice(0, 3_500),
   });
