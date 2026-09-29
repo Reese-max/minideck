@@ -65,3 +65,10 @@ test("runs independent judges after Dashi and redacts sensitive claims", async (
   assert.match(await read("src/reviser.ts"), /REVISION_OUTPUT_INVALID_SPEC_PATCH/);
   assert.match(await read("src/workflow.ts"), /plan revision for job/);
 });
+
+
+test("completion and workflow-failure reports carry the claim attempt fence", async () => {
+  const source = await read("src/mcp-service.ts");
+  assert.equal([...source.matchAll(/attemptCount: job\.attemptCount/g)].length, 2);
+  assert.match(source, /typeof value\.attemptCount === "number"/);
+});
