@@ -188,6 +188,9 @@
     judge(id, version) {
       return jsonRequest(`/api/projects/${id}/judge`, { version }, id);
     },
+    getDeck(id, version) {
+      return fetchDeck(id, version);
+    },
   };
 
   MD.pipeline = {
@@ -649,8 +652,10 @@
   }
 
   async function fetchDeck(id, version) {
-    const response = await fetch(`/api/projects/${id}/deck?version=${version}`, {
+    const query = version !== undefined && version !== null ? `?version=${version}` : "";
+    const response = await fetch(`/api/projects/${id}/deck${query}`, {
       cache: "no-store",
+      headers: projectHeaders(id),
     });
     if (!response.ok) throw await apiError(response);
     return response.text();
@@ -684,10 +689,11 @@
   }
 
   async function loadPreview(id, version) {
+    const html = await fetchDeck(id, version);
     await new Promise((resolve) => {
       frame.addEventListener("load", resolve, { once: true });
-      frame.removeAttribute("srcdoc");
-      frame.src = `/api/projects/${id}/deck?version=${version}&_=${Date.now()}`;
+      frame.removeAttribute("src");
+      frame.srcdoc = html;
     });
     fitPreview();
     currentDeckVersion = version;

@@ -18,7 +18,15 @@ npm ci
 npx wrangler types
 npm run check
 npx wrangler deploy --dry-run
+npx wrangler deploy --dry-run --env preview --containers-rollout=none
+npx wrangler deploy --dry-run --env production --containers-rollout=none
 ```
+
+Wrangler environments do not inherit bindings, `triggers`, or `vars`;
+`env.preview` and `env.production` each redeclare the
+D1/R2/service/Workflow/Durable Object bindings, the cron trigger, and every
+var the Runner needs. `PRESENTATION_RUNNER_TOKEN` and
+`CF_AI_ROUTER_API_KEY` remain secrets injected via `wrangler secret put --env`.
 
 The Docker image is intentionally pinned to `dashi-ppt-skill@0.4.11`, Node 22,
 Chromium, and CJK fonts. The image uses Dashi as a distributed package and must

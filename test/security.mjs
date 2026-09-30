@@ -7,3 +7,5 @@ const frame = player.match(/<iframe\b[^>]*id="play-deck"[^>]*>/i)?.[0] ?? "";
 assert.match(frame, /\bsandbox="allow-same-origin"/i);
 assert.doesNotMatch(frame, /allow-scripts/i);
 console.log("PASS 分享播放器 iframe 禁止 deck 腳本執行");
+
+await import("./runner-wrangler-env.mjs");
