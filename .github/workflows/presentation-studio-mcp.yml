@@ -1,0 +1,29 @@
+name: Presentation Studio MCP
+
+on:
+  pull_request:
+    paths:
+      - "workers/presentation-studio-mcp/**"
+      - ".github/workflows/presentation-studio-mcp.yml"
+  push:
+    branches: [main]
+    paths:
+      - "workers/presentation-studio-mcp/**"
+      - ".github/workflows/presentation-studio-mcp.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: workers/presentation-studio-mcp/package-lock.json
+      - run: cd workers/presentation-studio-mcp && npm ci
+      - run: cd workers/presentation-studio-mcp && npm run check
+      - run: cd workers/presentation-studio-mcp && npx --no-install wrangler deploy --dry-run

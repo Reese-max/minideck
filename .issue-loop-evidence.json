@@ -1,0 +1,54 @@
+{
+  "repo": "Reese-max/minideck",
+  "issue": 18,
+  "base_sha": "a8c48895191f268c715db01135d8794e2367c91d",
+  "red_proof": [
+    {
+      "command": "node --test workers/presentation-studio-mcp/test/regression.test.mjs",
+      "exit": 1,
+      "tests_passed": 2,
+      "tests_failed": 7,
+      "observed": "Before MCP fixes: different owners received the same cached project; all cached mutations bypassed owner checks; failed puts left 2 objects; a:b and a_b used the same key; over-budget revisions were accepted; expiry during artifact validation returned 200 instead of 409; both refreshes returned 200 instead of one 400."
+    },
+    {
+      "command": "node --test workers/presentation-studio-runner/test/regression.test.mjs",
+      "exit": 1,
+      "observed": "Before Runner fixes: a supplied patch changed an unrequested slide; the judges made 2 fetch calls for sensitive-bound content; a 20-minute raw exec was terminated by the 10-minute idle timer. CLI proof was collected separately after correcting the Windows preload file URL in the test harness."
+    },
+    {
+      "command": "node --test --test-name-pattern 'actual stdin runner' workers/presentation-studio-runner/test/regression.test.mjs",
+      "exit": 1,
+      "tests_passed": 1,
+      "tests_failed": 3,
+      "observed": "Before Runner fixes: failed validate:swiss, failed export:pptx, and sensitive claim input each produced succeeded rather than blocked. The valid-export control passed."
+    },
+    {
+      "command": "node --test --test-name-pattern 'own router call' workers/presentation-studio-runner/test/regression.test.mjs",
+      "exit": 1,
+      "tests_passed": 0,
+      "tests_failed": 1,
+      "observed": "Before the planner guard: sensitive currentSpec triggered 1 external fetch; expected 0."
+    },
+    {
+      "command": "node --test --test-name-pattern 'retain supported Dashi' workers/presentation-studio-runner/test/regression.test.mjs",
+      "exit": 1,
+      "tests_passed": 0,
+      "tests_failed": 1,
+      "observed": "Review of the first fix caught a compatibility regression: a supplied title/variants patch returned null. The correction preserves those existing fields and keeps planner field restrictions."
+    }
+  ],
+  "test_command": "npm run check && npm --prefix workers/presentation-studio-mcp run check && (cd workers/presentation-studio-runner && npx --no-install wrangler types && npm run check)",
+  "test_exit": 0,
+  "tests_passed": 35,
+  "tests_failed": 0,
+  "summary": "All configured root tests and 35 Worker tests passed under Git Bash, including 18 new behavior regressions; MCP and Runner typechecks passed. Root, MCP, and Runner Wrangler dry-runs exited 0; the Runner container image built successfully. Ten findings are fixed locally; four needs-human findings remain.",
+  "not_done": [
+    "needs-human: configure named preview/production resource bindings and router variables after choosing deployment resource identities.",
+    "needs-human: choose a bounded total execution duration or an attempt-fenced lease renewal API for workflows that can exceed 60 minutes.",
+    "needs-human: choose complete paginated visual evidence or a supported slide limit; current visual evidence covers at most 20 PNGs while input allows 100 slides.",
+    "needs-human: define deletion/in-flight upload coordination to prevent late R2 writes after deletion.",
+    "No push, external PR comment, Preview/Production deployment, remote CI rerun, or live end-to-end acceptance was performed.",
+    "The Docker image was built; the real Dashi render/export container smoke was not run. CLI regressions exercise the real stdin runner with fixture command and storage boundaries.",
+    "No lint script is configured; the available test, TypeScript, and local build checks were run."
+  ]
+}

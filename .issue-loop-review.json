@@ -1,0 +1,92 @@
+{
+  "pr": 18,
+  "head": "a8c48895191f268c715db01135d8794e2367c91d",
+  "findings": [
+    {
+      "severity": "med",
+      "file": "workers/presentation-studio-mcp/src/job-lease.mjs",
+      "line": 94,
+      "issue": "A lease expiring after the HTTP precheck still commits: the batch ignores the zero-row admission UPDATE, while result and finish guards only check status/attempt."
+    },
+    {
+      "severity": "high",
+      "file": "workers/presentation-studio-mcp/src/presentation.ts",
+      "line": 150,
+      "issue": "Idempotency lookup precedes ownership checks and uses a global key/hash without owner identity; another owner can replay cached project/job results."
+    },
+    {
+      "severity": "med",
+      "file": "workers/presentation-studio-mcp/src/presentation.ts",
+      "line": 406,
+      "issue": "Source upload failure before putSourceObjects returns loses the cleanup keys, leaving already-uploaded R2 objects without project metadata."
+    },
+    {
+      "severity": "med",
+      "file": "workers/presentation-studio-mcp/src/presentation.ts",
+      "line": 307,
+      "issue": "Distinct valid source IDs such as a:b and a_b map to the same sanitized R2 key and overwrite source evidence."
+    },
+    {
+      "severity": "med",
+      "file": "workers/presentation-studio-runner/src/reviser.ts",
+      "line": 222,
+      "issue": "Supplied revision patches bypass normalizePatch, allowing changes outside requested slides and silently accepting unknown IDs."
+    },
+    {
+      "severity": "high",
+      "file": "workers/presentation-studio-runner/src/judges.ts",
+      "line": 258,
+      "issue": "Sensitive claim integrity failures do not prevent full spec/preview egress to external judges; the revision planner also sends currentSpec before validating claim safety."
+    },
+    {
+      "severity": "med",
+      "file": "workers/presentation-studio-runner/runner/execute-job.mjs",
+      "line": 537,
+      "issue": "Export reports succeeded even when export commands or deterministic quality checks fail, allowing invalid artifacts to be marked exported."
+    },
+    {
+      "severity": "med",
+      "file": "workers/presentation-studio-mcp/src/auth.ts",
+      "line": 428,
+      "issue": "Concurrent refresh requests can both mint valid successor credentials before the old refresh token is revoked."
+    },
+    {
+      "severity": "med",
+      "file": "workers/presentation-studio-mcp/src/presentation.ts",
+      "line": 775,
+      "issue": "The revision budget counts only completed rounds; queued/running revisions can exceed max_rounds before current_round increments."
+    },
+    {
+      "severity": "med",
+      "file": "workers/presentation-studio-runner/src/container.ts",
+      "line": 9,
+      "issue": "The SDK idle timeout is 10 minutes while raw exec permits 30 minutes and does not refresh SDK activity, so valid jobs can be stopped early."
+    },
+    {
+      "severity": "high",
+      "file": "workers/presentation-studio-runner/wrangler.jsonc",
+      "line": 66,
+      "issue": "needs-human: named preview/production environments omit non-inherited D1, R2, service, Workflow, Durable Object bindings and router vars. Decide isolated preview resource identities and deployment topology before configuring them."
+    },
+    {
+      "severity": "med",
+      "file": "workers/presentation-studio-runner/src/workflow.ts",
+      "line": 85,
+      "issue": "needs-human: supported step retries can exceed the fixed 60-minute lease; no renewal exists, so recovery may replace live legitimate work. Choose bounded total job duration versus an attempt-fenced renewal API."
+    },
+    {
+      "severity": "med",
+      "file": "workers/presentation-studio-runner/runner/execute-job.mjs",
+      "line": 425,
+      "issue": "needs-human: the visual evidence is limited to 20 PNGs although input permits 100 slides, yet judgesComplete can become true. Choose complete paginated visual review versus an explicit supported slide limit."
+    },
+    {
+      "severity": "med",
+      "file": "workers/presentation-studio-mcp/src/presentation.ts",
+      "line": 1143,
+      "issue": "needs-human: deletion scans R2 before canceling jobs; an already-admitted upload may finish after the scan and leave data after successful deletion. Requires a deletion lifecycle/tombstone and in-flight-write cleanup contract."
+    }
+  ],
+  "fixed": true,
+  "summary": "Fixed ten reproducible defects in lease admission, owner-scoped idempotency, source storage, revision validation/budgets, sensitive-claim egress, export gating, refresh rotation, and container lifetime, with regression tests first failing and then passing. Git Bash checks passed (35 Worker tests plus all root test scripts), both Worker typechecks and local Wrangler builds passed; no push or deployment was performed. Four needs-human findings remain: environment resource bindings, long-job lease renewal, complete visual evidence beyond 20 slides, and deletion/in-flight upload coordination; this PR is not ready for merge."
+}
