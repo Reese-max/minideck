@@ -37,6 +37,18 @@ Bearer secret and are not registered as MCP tools. Claim leases expire after
 60 minutes so the Workflow/Container execution window cannot create duplicate
 work; completion accepts only constrained render/export result shapes.
 
+Expired leases do not strand jobs. Before selecting queued work, claim calls
+recoverExpiredJobLeases: a running job whose leased_until has passed is set
+back to queued (last_error = job_lease_expired_requeued) while
+attempt_count < max_attempts, or moved to a blocked terminal state with
+last_error/blocked_reason = job_lease_expired_max_attempts_exhausted plus a
+job.failed event once attempts are exhausted. The reclaimed job keeps its
+attempt history, so the next claim increments attempt_count — that count is
+the lease generation. Job completion writes are fenced by it: every statement
+in the completion batch carries a current-attempt guard, and a completion
+that reports a stale attemptCount is rejected with job_lease_not_current
+(409) so a previous owner cannot overwrite the new owner's results.
+
 ## Local checks
 
 Run npm ci, npm run check, and npx wrangler deploy --dry-run from this
