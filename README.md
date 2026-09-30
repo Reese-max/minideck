@@ -20,6 +20,20 @@ npx wrangler d1 execute minideck --remote --file migrations/0001_project_access_
 BASE=http://127.0.0.1:8787
 ```
 
+## 本機驗證（Local gate）
+
+與 CI `check` job 完全相同的檢查可在本機執行：
+
+```bash
+npm ci
+npm run check   # = npm test
+```
+
+GitHub Actions 自動觸發目前被帳號 Actions budget 阻擋（runner admission
+failure，非程式缺陷）；診斷、恢復選項與本機證據綁定規則見
+[docs/ci-admission.md](docs/ci-admission.md)。本機結果只證明實際跑過的
+產品路徑，不代表雲端 gate 已恢復。
+
 ## 九個主要端點
 
 | # | 方法與路徑 | 用途 |
