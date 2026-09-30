@@ -77,13 +77,15 @@ export function normalizeRevisionPatch(value, input) {
     if (!knownSlideIds.has(slide.id) || seen.has(slide.id)) return null;
     if (requestedSlideIds.size > 0 && !requestedSlideIds.has(slide.id)) return null;
     if ([...Object.keys(slide)].some((key) => !ALLOWED_SLIDE_KEYS.has(key))) return null;
-    const claims = slide.claims === undefined ? slide.sourceClaimIds : slide.claims;
-    if (
-      claims !== undefined &&
-      (!Array.isArray(claims) ||
-        claims.some((claimId) => typeof claimId !== "string" || !allowedClaimIds.has(claimId)))
-    ) {
-      return null;
+    for (const key of ["claims", "sourceClaimIds"]) {
+      const refs = slide[key];
+      if (
+        refs !== undefined &&
+        (!Array.isArray(refs) ||
+          refs.some((claimId) => typeof claimId !== "string" || !allowedClaimIds.has(claimId)))
+      ) {
+        return null;
+      }
     }
     seen.add(slide.id);
     slides.push(slide);

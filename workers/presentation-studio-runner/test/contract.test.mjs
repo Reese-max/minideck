@@ -100,3 +100,21 @@ test("supplied and planner spec patches share the same scope validation", async 
   assert.deepEqual(applied.changedSlides, ["s1"]);
   assert.equal(applied.payload.specPatch, null);
 });
+
+test("claim fields are each validated against verified non-sensitive ids", async () => {
+  const input = {
+    spec: { slides: [{ id: "s1", keyMessage: "one" }] },
+    sourceMap: {
+      claims: [
+        { claimId: "c1", sensitive: false },
+        { claimId: "c2", sensitive: true },
+      ],
+    },
+    payload: {},
+    changedSlides: ["s1"],
+  };
+  const smuggled = { slides: [{ id: "s1", claims: ["c1"], sourceClaimIds: ["c2"] }] };
+  assert.equal(normalizeRevisionPatch(smuggled, input), null);
+  const clean = { slides: [{ id: "s1", claims: ["c1"], sourceClaimIds: ["c1"] }] };
+  assert.ok(normalizeRevisionPatch(clean, input));
+});

@@ -161,7 +161,17 @@ function makeInput(overrides = {}) {
   console.log("PASS 空或非 slides 形狀的 supplied patch 被拒絕");
 }
 
-// 12. applySlideSpecPatch 保持既有 merge 語義（只覆寫 patch 內欄位）
+// 12. claims 與 sourceClaimIds 各自獨立驗證：不能借合法 claims 夾帶敏感 sourceClaimIds
+{
+  const input = makeInput();
+  const smuggled = { slides: [{ id: "s1", claims: ["c1"], sourceClaimIds: ["c2"] }] };
+  assert.equal(applyRevisionPatch(input, smuggled), null);
+  const clean = { slides: [{ id: "s1", claims: ["c1"], sourceClaimIds: ["c1"] }] };
+  assert.ok(applyRevisionPatch(input, clean));
+  console.log("PASS sourceClaimIds 獨立驗證，合法 claims 不得夾帶敏感 sourceClaimIds");
+}
+
+// 13. applySlideSpecPatch 保持既有 merge 語義（只覆寫 patch 內欄位）
 {
   const merged = applySlideSpecPatch(
     JSON.parse(JSON.stringify(SPEC)),
