@@ -22,12 +22,14 @@ import {
   claimProject,
   deleteProjectData,
   getProject,
+  publishDeckVersion,
   readDeck,
   readProjectState,
   readQuotaCounts,
   releaseProject,
   rollbackDeckVersion,
   saveDeckVersion,
+  unpublishDeckVersion,
 } from "./store.js";
 
 function json(data, status = 200) {
@@ -591,6 +593,33 @@ async function saveDeck(request, env, id) {
   }
 }
 
+async function publishDeck(request, env, id) {
+  const access = await authorizeProject(request, env, id);
+  if (access.response) return access.response;
+
+  const body = await requestJson(request);
+  if (!body) return json({ error: "請提供有效的 JSON 請求" }, 400);
+  if (!Number.isInteger(body.version) || body.version < 1) {
+    return json({ error: "版本編號無效" }, 400);
+  }
+
+  const published = await publishDeckVersion(env.DB, id, body.version);
+  if (!published) return json({ error: "找不到簡報版本" }, 404);
+  return json({
+    published: true,
+    version: published.version,
+    published_at: published.publishedAt,
+  });
+}
+
+async function unpublishDeck(request, env, id) {
+  const access = await authorizeProject(request, env, id);
+  if (access.response) return access.response;
+
+  await unpublishDeckVersion(env.DB, id);
+  return json({ published: false });
+}
+
 async function deleteProject(request, env, id) {
   const access = await authorizeProject(request, env, id);
   if (access.response) return access.response;
@@ -661,16 +690,27 @@ async function getPlayerResponse(request, env, id) {
     requestedVersion = Number(versionText);
   }
 
-  const result = await readDeck(env.DB, env.BUCKET, id, requestedVersion);
-  if (!result.project) return json({ error: "專案不存在" }, 404);
-  if (!result.deck) return json({ error: "找不到簡報版本" }, 404);
+  const project = await getProject(env.DB, id);
+  if (!project) return json({ error: "專案不存在" }, 404);
 
-  if (requestedVersion !== null && requestedVersion !== Number(result.project.current_version)) {
+  // The public player only ever serves published_version. Any other version
+  // is a draft preview reserved for the owner behind X-Project-Token.
+  const publishedVersion = Number(project.published_version ?? 0);
+  const version = requestedVersion ?? publishedVersion;
+
+  if (version !== publishedVersion) {
     const token = request.headers.get("X-Project-Token")?.trim();
-    if (!(await verifyProjectToken(token, result.project.access_token_hash))) {
-      return json({ error: "歷史版本不公開，需專案權杖" }, 403);
+    if (!(await verifyProjectToken(token, project.access_token_hash))) {
+      return json({ error: "版本未公開發佈，需專案權杖" }, 403);
     }
   }
+  if (!Number.isInteger(version) || version < 1) {
+    return json({ error: "簡報尚未發佈" }, 404);
+  }
+
+  const result = await readDeck(env.DB, env.BUCKET, id, version);
+  if (!result.project) return json({ error: "專案不存在" }, 404);
+  if (!result.deck) return json({ error: "找不到簡報版本" }, 404);
 
   const templateResponse = await env.ASSETS.fetch(
     new URL("/play.html", request.url),
@@ -716,7 +756,7 @@ export default {
       }
 
       const actionMatch = url.pathname.match(
-        /^\/api\/projects\/([^/]+)\/(generate|revise|image|rollback|judge)$/,
+        /^\/api\/projects\/([^/]+)\/(generate|revise|image|rollback|judge|publish|unpublish)$/,
       );
       if (actionMatch && request.method === "POST") {
         const [, id, action] = actionMatch;
@@ -726,6 +766,8 @@ export default {
         if (action === "revise") return await reviseDeck(request, env, ctx, id);
         if (action === "rollback") return await rollbackDeck(request, env, id);
         if (action === "judge") return await judgeDeckVersion(request, env, id);
+        if (action === "publish") return await publishDeck(request, env, id);
+        if (action === "unpublish") return await unpublishDeck(request, env, id);
         return await generateProjectImage(request, env, id);
       }
 

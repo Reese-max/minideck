@@ -199,6 +199,71 @@ const invalidRevise = await fetch(
 assert.equal(invalidRevise.status, 400);
 console.log("PASS revise 輸入驗證不呼叫 MiniMax");
 
+// 發佈／下線生命週期（live Worker + D1 + R2）
+const anonBeforePublish = await fetch(`${BASE_URL}/p/${projectId}`);
+assert.equal(anonBeforePublish.status, 404);
+console.log("PASS 未發佈專案的匿名播放頁 -> 404");
+
+const publishNoToken = await fetch(
+  `${BASE_URL}/api/projects/${projectId}/publish`,
+  {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ version: 3 }),
+  },
+);
+assert.equal(publishNoToken.status, 403);
+console.log("PASS publish 缺少權杖 -> 403");
+
+const publishMissing = await fetch(
+  `${BASE_URL}/api/projects/${projectId}/publish`,
+  {
+    method: "POST",
+    headers: projectHeaders(projectToken, true),
+    body: JSON.stringify({ version: 99 }),
+  },
+);
+assert.equal(publishMissing.status, 404);
+console.log("PASS publish 不存在版本 -> 404");
+
+const publish = await fetch(
+  `${BASE_URL}/api/projects/${projectId}/publish`,
+  {
+    method: "POST",
+    headers: projectHeaders(projectToken, true),
+    body: JSON.stringify({ version: 3 }),
+  },
+);
+assert.equal(publish.status, 200);
+const receipt = await publish.json();
+assert.equal(receipt.published, true);
+assert.equal(receipt.version, 3);
+assert.equal(typeof receipt.published_at, "number");
+console.log("PASS publish v3 -> 200，receipt 帶版本與時間戳");
+
+const player = await fetch(`${BASE_URL}/p/${projectId}`);
+assert.equal(player.status, 200);
+assert.match(await player.text(), /第一頁/);
+console.log("PASS 匿名播放頁呈現已發佈 v3（v1 回退內容）");
+
+const anonDraft = await fetch(`${BASE_URL}/p/${projectId}?version=2`);
+assert.equal(anonDraft.status, 403);
+const ownerPreview = await fetch(`${BASE_URL}/p/${projectId}?version=2`, {
+  headers: projectHeaders(projectToken),
+});
+assert.equal(ownerPreview.status, 200);
+console.log("PASS 草稿版本匿名 403、owner 權杖預覽 200");
+
+const unpublish = await fetch(
+  `${BASE_URL}/api/projects/${projectId}/unpublish`,
+  { method: "POST", headers: projectHeaders(projectToken) },
+);
+assert.equal(unpublish.status, 200);
+assert.deepEqual(await unpublish.json(), { published: false });
+const afterUnpublish = await fetch(`${BASE_URL}/p/${projectId}`);
+assert.equal(afterUnpublish.status, 404);
+console.log("PASS unpublish -> 匿名播放頁 404，專案保留");
+
 const deleted = await fetch(`${BASE_URL}/api/projects/${projectId}`, {
   method: "DELETE",
   headers: projectHeaders(projectToken),

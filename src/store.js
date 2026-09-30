@@ -33,7 +33,7 @@ export async function readQuotaCounts(db, entries) {
 export function getProject(db, id) {
   return db
     .prepare(
-      "SELECT id, brief, access_token_hash, current_version, status FROM projects WHERE id = ?1",
+      "SELECT id, brief, access_token_hash, current_version, published_version, published_at, publish_origin, status FROM projects WHERE id = ?1",
     )
     .bind(id)
     .first();
@@ -158,6 +158,36 @@ export async function rollbackDeckVersion(db, bucket, id, sourceVersion) {
   return { project: source.project, version };
 }
 
+// Single-statement conditional update: the EXISTS guard keeps the public head
+// from ever pointing at a version that does not exist in the same project,
+// even if a concurrent save/delete is in flight.
+export async function publishDeckVersion(db, id, version) {
+  const publishedAt = Date.now();
+  const result = await db
+    .prepare(
+      `UPDATE projects
+       SET published_version = ?2, published_at = ?3, publish_origin = 'publish'
+       WHERE id = ?1
+         AND EXISTS (
+           SELECT 1 FROM versions WHERE project_id = ?1 AND version = ?2
+         )`,
+    )
+    .bind(id, version, publishedAt)
+    .run();
+  if (Number(result.meta?.changes ?? 0) === 0) return null;
+  return { version, publishedAt };
+}
+
+export async function unpublishDeckVersion(db, id) {
+  const result = await db
+    .prepare(
+      "UPDATE projects SET published_version = NULL, published_at = NULL, publish_origin = NULL WHERE id = ?1",
+    )
+    .bind(id)
+    .run();
+  return Number(result.meta?.changes ?? 0) > 0;
+}
+
 export async function appendProjectMessage(db, id, role, content) {
   await db
     .prepare(
@@ -222,8 +252,23 @@ export async function readProjectState(db, id) {
       .bind(id),
   ]);
 
+  const currentVersion = Number(project.current_version ?? 0);
+  const publishedVersion =
+    project.published_version === null ||
+    project.published_version === undefined
+      ? null
+      : Number(project.published_version);
+
   return {
     status: project.status,
+    current_version: currentVersion,
+    published_version: publishedVersion,
+    published_at: project.published_at ?? null,
+    publish_origin: project.publish_origin ?? null,
+    unpublished_changes: Math.max(
+      0,
+      currentVersion - (publishedVersion ?? 0),
+    ),
     versions: versions.results,
     messages: messages.results,
   };
