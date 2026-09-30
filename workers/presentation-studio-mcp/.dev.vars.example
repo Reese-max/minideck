@@ -1,0 +1,14 @@
+# Required for the OAuth authorization-code flow.
+GITHUB_CLIENT_ID=
+GITHUB_CLIENT_SECRET=
+
+# Service-to-service secret for Workflow/Container job claim/complete calls.
+PRESENTATION_RUNNER_TOKEN=
+
+# Set this to the stable public HTTPS origin in production.
+# If omitted, local/preview requests derive the origin from the request URL.
+MCP_PUBLIC_ORIGIN=
+
+# Optional comma-separated allowlists for the MCP handler.
+MCP_ALLOWED_HOSTNAMES=
+MCP_ALLOWED_ORIGINS=
