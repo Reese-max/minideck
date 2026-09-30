@@ -7,6 +7,7 @@ import { DashiContainer } from "./container";
 import { runJudges } from "./judges";
 import { runPlanner } from "./planner";
 import { applyRevisionPatch, runRevisionPlanner } from "./reviser";
+import { claimIntegrityCheck, runJudgeIfIntegrityPasses } from "../runner/claim-integrity.mjs";
 import type { DashiJobInput, DashiJobResult, JsonObject, RunnerEnv, WorkflowParams } from "./types";
 
 const RETRIES = {
@@ -39,7 +40,10 @@ export class PresentationWorkflow extends WorkflowEntrypoint<RunnerEnv, Workflow
         { retries: RETRIES, timeout: "5 minutes" },
         async () => loadJobInput(this.env, job) as any,
       )) as DashiJobInput;
-      if (job.type === "revision") {
+      if (claimIntegrityCheck(input).exitCode !== 0) {
+        result = { status: "blocked", jobId: job.id, error: "CLAIM_INTEGRITY_FAILED" };
+      }
+      if (!result && job.type === "revision") {
         const suppliedPatch = isObject(input.payload.specPatch) ? input.payload.specPatch : null;
         if (suppliedPatch) {
           const patchedInput = applyRevisionPatch(input, suppliedPatch);
@@ -94,13 +98,20 @@ export class PresentationWorkflow extends WorkflowEntrypoint<RunnerEnv, Workflow
       }
       if (result.status === "succeeded" && result.version) {
         const rendererResult = result;
-        result = (await step.do(
-          `judge dashi job ${job.id}`,
-          { retries: RETRIES, timeout: "10 minutes" },
-          async () => {
-            return runJudges(this.env, executionInput, rendererResult) as any;
-          },
-        )) as DashiJobResult;
+        const judged = await runJudgeIfIntegrityPasses(
+          rendererResult,
+          async () =>
+            (await step.do(
+              `judge dashi job ${job.id}`,
+              { retries: RETRIES, timeout: "10 minutes" },
+              async () => runJudges(this.env, executionInput, rendererResult) as any,
+            )) as DashiJobResult,
+        );
+        result = judged ?? {
+          status: "blocked",
+          jobId: job.id,
+          error: "CLAIM_INTEGRITY_FAILED",
+        };
       }
     } catch (error) {
       return step.do(`record failed job ${job.id}`, async () => {

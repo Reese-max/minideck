@@ -4,6 +4,7 @@ import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { normalizeIntentionalDecorationOverflow } from "./deck-normalizer.mjs";
+import { claimIntegrityCheck, claimTextMap, runWithClaimIntegrityGate } from "./claim-integrity.mjs";
 
 const MAX_INPUT_BYTES = 40 * 1024 * 1024;
 const MAX_COMMAND_OUTPUT = 4 * 1024 * 1024;
@@ -85,16 +86,6 @@ async function readJson(path) {
 
 function safeText(value, fallback = "") {
   return typeof value === "string" && value.trim() ? value.trim() : fallback;
-}
-
-function claimTextMap(sourceMap) {
-  const map = new Map();
-  for (const claim of Array.isArray(sourceMap?.claims) ? sourceMap.claims : []) {
-    if (isObject(claim) && typeof claim.claimId === "string" && typeof claim.text === "string") {
-      map.set(claim.claimId, claim.text);
-    }
-  }
-  return map;
 }
 
 function normalizeItems(slide, sourceMap) {
@@ -340,36 +331,6 @@ function commandPass(command) {
   return Boolean(command && command.exitCode === 0);
 }
 
-function claimIntegrityCheck(input) {
-  const claims = new Map();
-  for (const claim of Array.isArray(input?.sourceMap?.claims) ? input.sourceMap.claims : []) {
-    if (!isObject(claim) || typeof claim.claimId !== "string") continue;
-    claims.set(claim.claimId, claim);
-  }
-  const failures = [];
-  for (const slide of Array.isArray(input?.spec?.slides) ? input.spec.slides : []) {
-    if (!isObject(slide)) continue;
-    const slideClaims = slide.claims === undefined ? slide.sourceClaimIds : slide.claims;
-    if (slideClaims === undefined) continue;
-    if (!Array.isArray(slideClaims)) {
-      failures.push(`${safeText(slide.id, "slide")}: claims must be an array`);
-      continue;
-    }
-    for (const claimId of slideClaims) {
-      const claim = typeof claimId === "string" ? claims.get(claimId) : null;
-      if (!claim) {
-        failures.push(`${safeText(slide.id, "slide")}: unknown claim ${String(claimId)}`);
-      } else if (claim.sensitive === true || claim.sensitive === 1 || claim.sensitive === "true") {
-        failures.push(`${safeText(slide.id, "slide")}: sensitive claim ${claimId}`);
-      }
-    }
-  }
-  return {
-    exitCode: failures.length === 0 ? 0 : 1,
-    output: failures.length === 0 ? "all claim bindings resolve to non-sensitive source claims" : failures.join("; "),
-  };
-}
-
 function makeAudit(renderResult, input, exportPass = undefined) {
   const commands = { ...renderResult.commands, claimIntegrity: claimIntegrityCheck(input) };
   const deterministic = {
@@ -490,6 +451,13 @@ async function collectArtifacts(input, renderResult, audit, includeExports = {})
 
 async function execute(input) {
   if (!isObject(input) || typeof input.jobId !== "string") throw new Error("INVALID_JOB_INPUT");
+  const integrityInput =
+    input.type === "revision" &&
+    isObject(input.spec) &&
+    isObject(input.payload?.specPatch)
+      ? { ...input, spec: patchSpec(input.spec, input.payload.specPatch) }
+      : input;
+  return runWithClaimIntegrityGate(integrityInput, async () => {
   if (input.type === "plan") {
     return { status: "blocked", jobId: input.jobId, error: "PLANNER_FALLBACK_REQUIRES_CHATGPT_SLIDE_SPEC" };
   }
@@ -566,6 +534,7 @@ async function execute(input) {
   } finally {
     await rm(workDir, { recursive: true, force: true }).catch(() => undefined);
   }
+  });
 }
 
 try {

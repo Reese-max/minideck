@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { test } from "node:test";
+import {
+  claimIntegrityCheck,
+  claimTextMap,
+  runJudgeIfIntegrityPasses,
+  runWithClaimIntegrityGate,
+} from "../runner/claim-integrity.mjs";
 
 const root = new URL("../", import.meta.url);
 
@@ -64,4 +70,77 @@ test("runs independent judges after Dashi and redacts sensitive claims", async (
   assert.match(await read("runner/execute-job.mjs"), /claimIntegrityCheck/);
   assert.match(await read("src/reviser.ts"), /REVISION_OUTPUT_INVALID_SPEC_PATCH/);
   assert.match(await read("src/workflow.ts"), /plan revision for job/);
+});
+
+test("blocks sensitive claim effects before rendering and Judge egress", async () => {
+  const sentinel = "SENSITIVE_SENTINEL_MINIDECK_SECURITY_TEST";
+  const input = {
+    jobId: "sensitive-claim-test",
+    spec: { slides: [{ id: "s1", claims: ["claim-private"] }] },
+    sourceMap: {
+      claims: [{ claimId: "claim-private", text: sentinel, sensitive: true }],
+    },
+  };
+  let renderCalls = 0;
+  let uploadCalls = 0;
+  let judgeRouterCalls = 0;
+
+  const blocked = await runWithClaimIntegrityGate(input, async () => {
+    renderCalls += 1;
+    uploadCalls += 1;
+    return { status: "succeeded", html: sentinel, preview: sentinel };
+  });
+  assert.equal(blocked.status, "blocked");
+  assert.equal(blocked.error, "CLAIM_INTEGRITY_FAILED");
+  assert.doesNotMatch(JSON.stringify(blocked), /SENSITIVE_SENTINEL_MINIDECK_SECURITY_TEST/);
+  assert.equal(claimIntegrityCheck(input).exitCode, 1);
+  assert.equal(claimTextMap(input.sourceMap).has("claim-private"), false);
+
+  const judgeResult = await runJudgeIfIntegrityPasses(
+    {
+      status: "succeeded",
+      version: { audit: { deterministic: { claimIntegrity: false } } },
+    },
+    async () => {
+      judgeRouterCalls += 1;
+      return sentinel;
+    },
+  );
+  assert.equal(judgeResult, null);
+  assert.equal(renderCalls, 0);
+  assert.equal(uploadCalls, 0);
+  assert.equal(judgeRouterCalls, 0);
+
+  const safeInput = {
+    ...input,
+    sourceMap: {
+      claims: [{ claimId: "claim-private", text: sentinel, sensitive: false }],
+    },
+  };
+  const rendered = await runWithClaimIntegrityGate(safeInput, async () => {
+    renderCalls += 1;
+    return { status: "succeeded" };
+  });
+  assert.equal(rendered.status, "succeeded");
+  assert.equal(claimIntegrityCheck(safeInput).exitCode, 0);
+  assert.equal(claimTextMap(safeInput.sourceMap).get("claim-private"), sentinel);
+  assert.equal(renderCalls, 1);
+});
+
+test("wires integrity preflight before render, revision planning, and Judges", async () => {
+  const execution = await read("runner/execute-job.mjs");
+  const workflow = await read("src/workflow.ts");
+  const judges = await read("src/judges.ts");
+
+  assert.ok(execution.includes("spec: patchSpec(input.spec, input.payload.specPatch)"));
+  assert.ok(
+    execution.indexOf("return runWithClaimIntegrityGate(integrityInput, async () => {") <
+      execution.indexOf("await writeSources(input, workDir)"),
+  );
+  assert.ok(
+    workflow.indexOf("claimIntegrityCheck(input).exitCode") <
+      workflow.indexOf("async () => runRevisionPlanner(this.env, input)"),
+  );
+  assert.match(workflow, /runJudgeIfIntegrityPasses/);
+  assert.match(judges, /shouldRunJudges\(result\)/);
 });
