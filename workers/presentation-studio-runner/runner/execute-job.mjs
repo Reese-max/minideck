@@ -4,6 +4,7 @@ import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { normalizeIntentionalDecorationOverflow } from "./deck-normalizer.mjs";
+import { claimIntegrityCheck } from "./claim-integrity.mjs";
 
 const MAX_INPUT_BYTES = 40 * 1024 * 1024;
 const MAX_COMMAND_OUTPUT = 4 * 1024 * 1024;
@@ -340,36 +341,6 @@ function commandPass(command) {
   return Boolean(command && command.exitCode === 0);
 }
 
-function claimIntegrityCheck(input) {
-  const claims = new Map();
-  for (const claim of Array.isArray(input?.sourceMap?.claims) ? input.sourceMap.claims : []) {
-    if (!isObject(claim) || typeof claim.claimId !== "string") continue;
-    claims.set(claim.claimId, claim);
-  }
-  const failures = [];
-  for (const slide of Array.isArray(input?.spec?.slides) ? input.spec.slides : []) {
-    if (!isObject(slide)) continue;
-    const slideClaims = slide.claims === undefined ? slide.sourceClaimIds : slide.claims;
-    if (slideClaims === undefined) continue;
-    if (!Array.isArray(slideClaims)) {
-      failures.push(`${safeText(slide.id, "slide")}: claims must be an array`);
-      continue;
-    }
-    for (const claimId of slideClaims) {
-      const claim = typeof claimId === "string" ? claims.get(claimId) : null;
-      if (!claim) {
-        failures.push(`${safeText(slide.id, "slide")}: unknown claim ${String(claimId)}`);
-      } else if (claim.sensitive === true || claim.sensitive === 1 || claim.sensitive === "true") {
-        failures.push(`${safeText(slide.id, "slide")}: sensitive claim ${claimId}`);
-      }
-    }
-  }
-  return {
-    exitCode: failures.length === 0 ? 0 : 1,
-    output: failures.length === 0 ? "all claim bindings resolve to non-sensitive source claims" : failures.join("; "),
-  };
-}
-
 function makeAudit(renderResult, input, exportPass = undefined) {
   const commands = { ...renderResult.commands, claimIntegrity: claimIntegrityCheck(input) };
   const deterministic = {
@@ -496,6 +467,9 @@ async function execute(input) {
   if (input.type !== "render" && input.type !== "revision" && input.type !== "export") {
     return { status: "blocked", jobId: input.jobId, error: "JOB_TYPE_NOT_ALLOWED" };
   }
+  if (!commandPass(claimIntegrityCheck(input))) {
+    return { status: "blocked", jobId: input.jobId, error: "CLAIM_INTEGRITY_FAILED" };
+  }
   const workDir = await mkdtemp(join(tmpdir(), `presentation-studio-${input.jobId}-`));
   try {
     await writeSources(input, workDir);
@@ -523,6 +497,9 @@ async function execute(input) {
       if (requested.has("html")) exportPass = exportPass ?? true;
     }
     const audit = makeAudit(renderResult, input, exportPass);
+    if (input.type === "export" && !Object.values(audit.deterministic).every(Boolean)) {
+      return { status: "blocked", jobId: input.jobId, error: "EXPORT_VALIDATION_FAILED" };
+    }
     const artifacts = await collectArtifacts(input, renderResult, audit, exportPaths);
     const finalGoal = await readJson(goal.goalPath);
     const rendererReport = {

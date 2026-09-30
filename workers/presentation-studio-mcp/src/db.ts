@@ -218,19 +218,21 @@ export interface IdempotencyReservation {
 
 export async function beginIdempotency(
   db: D1Database,
+  ownerId: string,
   toolName: string,
   idempotencyKey: string | undefined,
   input: unknown,
 ): Promise<{ existing: unknown } | { reservation: IdempotencyReservation } | null> {
   if (!idempotencyKey) return null;
-  const key = idempotencyKey.trim();
-  if (!/^[A-Za-z0-9._:-]{8,160}$/.test(key)) {
+  const suppliedKey = idempotencyKey.trim();
+  if (!/^[A-Za-z0-9._:-]{8,160}$/.test(suppliedKey)) {
     throw new Error(
       "INVALID_IDEMPOTENCY_KEY: use 8-160 letters, numbers, dot, underscore, colon, or hyphen",
     );
   }
 
-  const requestHash = await sha256Hex(stableStringify(input));
+  const key = await sha256Hex(stableStringify([ownerId, suppliedKey]));
+  const requestHash = await sha256Hex(stableStringify({ ownerId, input }));
   const existing = await db
     .prepare(
       "SELECT tool_name, request_hash, result_json, expires_at " +

@@ -28,6 +28,8 @@ license terms. This repository does not copy Dashi source into the Worker.
 ## Deployment
 
 Use the root GitHub Actions workflow for a manual preview or production deploy.
+The named environments still require explicit resource bindings and router
+variables before deployment; the top-level bindings are not inherited.
 Preview has polling disabled so it cannot consume production jobs. Production
 deployment is intentionally manual because Wrangler activates the Worker before
 the container image rollout is complete; run the end-to-end smoke test only after
@@ -40,11 +42,17 @@ Judge claim context exclude records marked sensitive. Without that secret, a
 ChatGPT-first `slideSpec` still renders normally, while a project without a
 spec and a revision without a supplied `specPatch` fail closed. Every render
 without Judges is also held for review.
+Specs binding unknown or sensitive claims are blocked before rendering or
+external Judge/planner calls. Export jobs must pass deterministic checks and
+every requested export command before uploading artifacts.
 
 When a revision contains only an instruction, the Runner's isolated revision
 planner can produce a validated, targeted patch if the router secret is set.
 It may touch only existing slide IDs and verified non-sensitive claim IDs;
 otherwise use `specPatch` from ChatGPT directly.
+Supplied patches receive the same slide-target and claim checks while retaining
+Dashi fields such as `title` and `variants`. Raw container execution refreshes
+the idle deadline to 35 minutes, covering its 30-minute command timeout.
 
 For deployment, configure the shared `PRESENTATION_RUNNER_TOKEN` secret on
 both Workers. Configure `CF_AI_ROUTER_API_KEY` only on the runner; it is never

@@ -19,6 +19,8 @@ The /mcp endpoint exposes exactly eight high-level tools:
 - delete_presentation
 
 All project reads and writes are scoped to the authenticated OAuth owner.
+Idempotency keys are also scoped to that owner. Refresh token rotation consumes
+the old token and creates its successor in one database transaction.
 create_presentation accepts a ChatGPT-first slideSpec, inline text or base64
 source content, and claim-to-source mappings. The Worker stores source objects
 under a generated project prefix and only stores the corresponding metadata in
@@ -34,8 +36,9 @@ quality contract.
 The runner-only endpoints are POST /internal/jobs/claim and
 POST /internal/jobs/complete. They require the PRESENTATION_RUNNER_TOKEN
 Bearer secret and are not registered as MCP tools. Claim leases expire after
-60 minutes so the Workflow/Container execution window cannot create duplicate
-work; completion accepts only constrained render/export result shapes.
+60 minutes; completion accepts only constrained render/export result shapes.
+There is currently no lease renewal, so executions extending beyond that window
+can be reclaimed even while their Workflow is still active.
 
 Expired leases do not strand jobs. Before selecting queued work, claim calls
 recoverExpiredJobLeases: a running job whose leased_until has passed is set
@@ -48,6 +51,9 @@ the lease generation. Job completion writes are fenced by it: every statement
 in the completion batch carries a current-attempt guard, and a completion
 that reports a stale attemptCount is rejected with job_lease_not_current
 (409) so a previous owner cannot overwrite the new owner's results.
+Completion also checks lease expiry inside the D1 transaction before any result
+writes; failed admission rolls back the entire batch. Queued and running revision
+jobs reserve round budget before they finish.
 
 ## Local checks
 

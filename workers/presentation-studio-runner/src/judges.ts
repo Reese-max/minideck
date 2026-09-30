@@ -1,4 +1,5 @@
 import { base64FromBytes, sha256Hex } from "./crypto";
+import { claimIntegrityCheck } from "../runner/claim-integrity.mjs";
 import type { DashiAudit, DashiJobInput, DashiJobResult, JsonObject, RunnerEnv } from "./types";
 
 const MAX_JUDGE_PROMPT_CHARS = 120_000;
@@ -233,6 +234,12 @@ export async function runJudges(
 ): Promise<DashiJobResult> {
   if (!result.version) return result;
   const audit = result.version.audit;
+  if (
+    claimIntegrityCheck(input).exitCode !== 0 ||
+    claimIntegrityCheck({ ...input, spec: result.version.spec }).exitCode !== 0
+  ) {
+    return blockedJudgeResult(env, input, result, audit, "CLAIM_INTEGRITY_FAILED");
+  }
   if (!env.CF_AI_ROUTER_URL?.trim() || !env.CF_AI_ROUTER_API_KEY?.trim()) {
     return blockedJudgeResult(env, input, result, audit, "JUDGES_NOT_CONFIGURED");
   }

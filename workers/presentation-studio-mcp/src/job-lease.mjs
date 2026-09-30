@@ -9,9 +9,10 @@ export const CLAIM_QUEUED_JOB_SQL =
     "AND (leased_until IS NULL OR leased_until <= datetime('now'))";
 
 export const BEGIN_JOB_COMPLETION_SQL =
-  "UPDATE presentation_jobs SET updated_at = datetime('now') " +
+  "SELECT CASE WHEN EXISTS (SELECT 1 FROM presentation_jobs " +
     "WHERE id = ? AND status = 'running' AND attempt_count = ? " +
-    "AND leased_until IS NOT NULL AND leased_until > datetime('now')";
+    "AND leased_until IS NOT NULL AND leased_until > datetime('now')) " +
+    "THEN 1 ELSE json('job_lease_not_current') END";
 
 export const JOB_COMPLETION_GUARD_SQL =
   "EXISTS (SELECT 1 FROM presentation_jobs AS lease_guard " +
@@ -88,14 +89,23 @@ export async function recoverExpiredJobLeases(db, createId) {
 }
 
 export async function runJobCompletion(db, job, statements, finishStatement) {
-  // D1 executes the batch atomically. Every result statement carries the
-  // current-attempt guard and the trailing finish CAS requires this claim's
-  // attempt to still own the running job; a stale claimant lands zero changes.
-  const results = await db.batch([
-    db.prepare(BEGIN_JOB_COMPLETION_SQL).bind(job.id, job.attempt_count),
-    ...statements,
-    finishStatement,
-  ]);
+  // A zero-row UPDATE does not abort a D1 batch. SQLite's JSON error makes
+  // failed admission roll back the whole transaction before any result writes.
+  // Check time once at admission; a lease ticking over inside the batch must
+  // not allow only some result statements to commit.
+  let results;
+  try {
+    results = await db.batch([
+      db.prepare(BEGIN_JOB_COMPLETION_SQL).bind(job.id, job.attempt_count),
+      ...statements,
+      finishStatement,
+    ]);
+  } catch (error) {
+    if (/malformed JSON/i.test([error?.message, error?.cause?.message].join(" "))) {
+      throw new Error(JOB_LEASE_NOT_CURRENT, { cause: error });
+    }
+    throw error;
+  }
   if (results.at(-1)?.meta?.changes !== 1) {
     throw new Error(JOB_LEASE_NOT_CURRENT);
   }

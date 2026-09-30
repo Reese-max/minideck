@@ -419,34 +419,24 @@ async function handleRefreshToken(
   ) {
     return jsonResponse({ error: "invalid_grant" }, 400);
   }
-  await env.DB.prepare(
-    "UPDATE presentation_oauth_tokens SET last_used_at = datetime('now') " +
-      "WHERE refresh_token_hash = ?",
-  )
-    .bind(row.refresh_token_hash)
-    .run();
-  const response = await issueTokens(env, row.owner_login);
-  await env.DB.prepare(
-    "UPDATE presentation_oauth_tokens SET revoked_at = datetime('now') " +
-      "WHERE refresh_token_hash = ?",
-  )
-    .bind(row.refresh_token_hash)
-    .run();
-  return response;
+  return issueTokens(env, row.owner_login, row.refresh_token_hash);
 }
 
 async function issueTokens(
   env: Env,
   ownerLogin: string,
+  previousRefreshHash?: string,
 ): Promise<Response> {
   const accessToken = randomToken(32);
   const refreshToken = randomToken(32);
   const accessExpiresAt = new Date(Date.now() + ACCESS_TOKEN_TTL_MS).toISOString();
   const refreshExpiresAt = new Date(Date.now() + REFRESH_TOKEN_TTL_MS).toISOString();
-  await env.DB.prepare(
+  const insert = env.DB.prepare(
     "INSERT INTO presentation_oauth_tokens " +
       "(access_token_hash, refresh_token_hash, owner_login, scopes_json, " +
-      "access_expires_at, refresh_expires_at) VALUES (?, ?, ?, ?, ?, ?)",
+      "access_expires_at, refresh_expires_at) SELECT ?, ?, ?, ?, ?, ?" +
+      (previousRefreshHash ? " WHERE EXISTS (SELECT 1 FROM presentation_oauth_tokens " +
+        "WHERE refresh_token_hash = ? AND revoked_at IS NULL AND julianday(refresh_expires_at) > julianday('now'))" : ""),
   )
     .bind(
       await sha256Hex(accessToken),
@@ -455,8 +445,20 @@ async function issueTokens(
       JSON.stringify(DEFAULT_SCOPES),
       accessExpiresAt,
       refreshExpiresAt,
-    )
-    .run();
+      ...(previousRefreshHash ? [previousRefreshHash] : []),
+    );
+  if (previousRefreshHash) {
+    const rotated = await env.DB.batch([
+      insert,
+      env.DB.prepare(
+        "UPDATE presentation_oauth_tokens SET revoked_at = datetime('now'), last_used_at = datetime('now') " +
+          "WHERE refresh_token_hash = ? AND revoked_at IS NULL",
+      ).bind(previousRefreshHash),
+    ]);
+    if (rotated[0].meta.changes !== 1) return jsonResponse({ error: "invalid_grant" }, 400);
+  } else {
+    await insert.run();
+  }
   return jsonResponse({
     access_token: accessToken,
     refresh_token: refreshToken,

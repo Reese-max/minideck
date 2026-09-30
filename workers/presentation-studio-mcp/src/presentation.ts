@@ -142,12 +142,13 @@ function withoutKey<T extends { idempotencyKey?: string }>(value: T): Omit<T, "i
 
 async function runIdempotent<T>(
   env: Env,
+  ownerId: string,
   toolName: string,
   key: string | undefined,
   input: unknown,
   action: () => Promise<T>,
 ): Promise<T> {
-  const reservationState = await beginIdempotency(env.DB, toolName, key, input);
+  const reservationState = await beginIdempotency(env.DB, ownerId, toolName, key, input);
   if (reservationState && "existing" in reservationState) {
     return reservationState.existing as T;
   }
@@ -265,6 +266,7 @@ async function putSourceObjects(
   env: Env,
   projectId: string,
   sources: Array<z.infer<typeof sourceSchema>>,
+  keys: string[],
 ): Promise<{
   rows: Array<{
     id: string;
@@ -276,7 +278,6 @@ async function putSourceObjects(
     sha256: string;
     byteSize: number;
   }>;
-  keys: string[];
   totalBytes: number;
 }> {
   const prefix = projectPrefix(env, projectId);
@@ -290,7 +291,6 @@ async function putSourceObjects(
     sha256: string;
     byteSize: number;
   }> = [];
-  const keys: string[] = [];
   let totalBytes = 0;
 
   for (const source of sources) {
@@ -305,11 +305,11 @@ async function putSourceObjects(
     }
 
     const safeName = safePathSegment(source.fileName, source.sourceId);
-    const key = prefix + "sources/" + safePathSegment(source.sourceId) + "/" + safeName;
+    const key = prefix + "sources/" + await sha256Hex(source.sourceId) + "/" + safeName;
+    keys.push(key);
     await env.BUCKET.put(key, content.bytes, {
       httpMetadata: { contentType: content.contentType },
     });
-    keys.push(key);
     rows.push({
       id: projectId + ":" + source.sourceId,
       externalId: source.sourceId,
@@ -322,7 +322,7 @@ async function putSourceObjects(
       byteSize: content.bytes.byteLength,
     });
   }
-  return { rows, keys, totalBytes };
+  return { rows, totalBytes };
 }
 
 async function deleteKeys(env: Env, keys: string[]): Promise<void> {
@@ -403,14 +403,13 @@ async function createPresentation(
   const uploadedKeys: string[] = [];
 
   try {
-    const uploaded = await putSourceObjects(env, projectId, sources);
-    uploadedKeys.push(...uploaded.keys);
+    const uploaded = await putSourceObjects(env, projectId, sources, uploadedKeys);
     const sourceMap = sourceMapPayload(projectId, uploaded.rows, claims);
     const sourceMapBytes = jsonBytes(sourceMap);
+    uploadedKeys.push(sourceMapKey);
     await env.BUCKET.put(sourceMapKey, sourceMapBytes, {
       httpMetadata: { contentType: "application/json" },
     });
-    uploadedKeys.push(sourceMapKey);
 
     const statements: D1PreparedStatement[] = [
       env.DB.prepare(
@@ -767,6 +766,7 @@ async function requestRevision(
   await assertV2Configuration(env);
   return runIdempotent(
     env,
+    ownerId,
     "request_presentation_revision",
     input.idempotencyKey,
     withoutKey(input),
@@ -790,19 +790,22 @@ async function requestRevision(
         strategy: "targeted-repair",
         requestedBy: ownerId,
       };
-      await env.DB.batch([
+      const queued = await env.DB.batch([
         env.DB.prepare(
           "INSERT INTO presentation_jobs " +
             "(id, project_id, job_type, status, payload_json, max_attempts) " +
-            "VALUES (?, ?, 'revision', 'queued', ?, 3)",
-        ).bind(jobId, project.id, JSON.stringify(payload)),
+            "SELECT ?, ?, 'revision', 'queued', ?, 3 FROM presentation_projects p " +
+            "WHERE p.id = ? AND p.current_round + (SELECT COUNT(*) FROM presentation_jobs j " +
+            "WHERE j.project_id = p.id AND j.job_type = 'revision' AND j.status IN ('queued', 'running')) < p.max_rounds",
+        ).bind(jobId, project.id, JSON.stringify(payload), project.id),
         env.DB.prepare(
           "UPDATE presentation_projects SET status = 'revision_queued', updated_at = datetime('now') " +
-            "WHERE id = ?",
-        ).bind(project.id),
+            "WHERE id = ? AND EXISTS (SELECT 1 FROM presentation_jobs WHERE id = ?)",
+        ).bind(project.id, jobId),
         env.DB.prepare(
           "INSERT INTO presentation_events " +
-            "(id, project_id, event_type, payload_json) VALUES (?, ?, 'revision.requested', ?)",
+            "(id, project_id, event_type, payload_json) SELECT ?, ?, 'revision.requested', ? " +
+            "WHERE EXISTS (SELECT 1 FROM presentation_jobs WHERE id = ?)",
         ).bind(
           randomId(),
           project.id,
@@ -811,8 +814,10 @@ async function requestRevision(
             parentVersionId,
             slideIds: input.slideIds || [],
           }),
+          jobId,
         ),
       ]);
+      if (queued[0].meta.changes !== 1) throw new Error("MAX_ROUNDS_REACHED: revision budget is already reserved");
       return {
         projectId: project.id,
         jobId,
@@ -946,6 +951,7 @@ async function approvePresentation(
   await assertV2Configuration(env);
   return runIdempotent(
     env,
+    ownerId,
     "approve_presentation",
     input.idempotencyKey,
     withoutKey(input),
@@ -1014,6 +1020,7 @@ async function exportPresentation(
   await assertV2Configuration(env);
   return runIdempotent(
     env,
+    ownerId,
     "export_presentation",
     input.idempotencyKey,
     withoutKey(input),
@@ -1213,6 +1220,7 @@ export function registerPresentationTools(
       const input = rawInput as z.infer<z.ZodObject<typeof createInputSchema>>;
       const output = await runIdempotent(
         env,
+        ownerId,
         "create_presentation",
         input.idempotencyKey,
         withoutKey(input),

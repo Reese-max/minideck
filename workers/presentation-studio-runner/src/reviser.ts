@@ -1,4 +1,5 @@
 import type { DashiJobInput, JsonObject, RunnerEnv } from "./types";
+import { claimIntegrityCheck } from "../runner/claim-integrity.mjs";
 
 const MAX_PROMPT_CHARS = 120_000;
 const MAX_PATCH_BYTES = 200_000;
@@ -104,6 +105,7 @@ function applySlideSpecPatch(
 function normalizePatch(
   value: JsonObject | null,
   input: DashiJobInput,
+  restrictFields = true,
 ): JsonObject | null {
   if (!value || !Array.isArray(value.slides) || value.slides.length === 0 || value.slides.length > 100) {
     return null;
@@ -122,16 +124,17 @@ function normalizePatch(
     if (!isObject(slide) || typeof slide.id !== "string") return null;
     if (!knownSlideIds.has(slide.id) || seen.has(slide.id)) return null;
     if (requestedSlideIds.size > 0 && !requestedSlideIds.has(slide.id)) return null;
-    if ([...Object.keys(slide)].some((key) => !ALLOWED_SLIDE_KEYS.has(key))) return null;
-    const claims = slide.claims === undefined ? slide.sourceClaimIds : slide.claims;
-    if (
-      claims !== undefined &&
-      (!Array.isArray(claims) ||
-        claims.some(
-          (claimId) => typeof claimId !== "string" || !allowedClaimIds.has(claimId),
-        ))
-    ) {
-      return null;
+    if (restrictFields && Object.keys(slide).some((key) => !ALLOWED_SLIDE_KEYS.has(key))) return null;
+    for (const claims of [slide.claims, slide.sourceClaimIds]) {
+      if (
+        claims !== undefined &&
+        (!Array.isArray(claims) ||
+          claims.some(
+            (claimId) => typeof claimId !== "string" || !allowedClaimIds.has(claimId),
+          ))
+      ) {
+        return null;
+      }
     }
     seen.add(slide.id);
     slides.push(slide);
@@ -155,6 +158,9 @@ export async function runRevisionPlanner(
   }
   if (!input.spec || !Array.isArray(input.spec.slides)) {
     return { status: "blocked", error: "REVISION_SOURCE_SPEC_MISSING" };
+  }
+  if (claimIntegrityCheck(input).exitCode !== 0) {
+    return { status: "blocked", error: "CLAIM_INTEGRITY_FAILED" };
   }
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 90_000);
@@ -219,11 +225,14 @@ export function applyRevisionPatch(
   input: DashiJobInput,
   specPatch: JsonObject,
 ): DashiJobInput | null {
-  const patchedSpec = applySlideSpecPatch(input.spec, specPatch);
+  const patch = normalizePatch(specPatch, input, false);
+  if (!patch) return null;
+  const patchedSpec = applySlideSpecPatch(input.spec, patch);
   if (!patchedSpec) return null;
   return {
     ...input,
     spec: patchedSpec,
+    changedSlides: (patch.slides as JsonObject[]).map((slide) => String(slide.id)),
     payload: { ...input.payload, specPatch: null },
   };
 }
