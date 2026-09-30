@@ -265,6 +265,7 @@ async function putSourceObjects(
   env: Env,
   projectId: string,
   sources: Array<z.infer<typeof sourceSchema>>,
+  keys: string[],
 ): Promise<{
   rows: Array<{
     id: string;
@@ -290,7 +291,6 @@ async function putSourceObjects(
     sha256: string;
     byteSize: number;
   }> = [];
-  const keys: string[] = [];
   let totalBytes = 0;
 
   for (const source of sources) {
@@ -305,11 +305,11 @@ async function putSourceObjects(
     }
 
     const safeName = safePathSegment(source.fileName, source.sourceId);
-    const key = prefix + "sources/" + safePathSegment(source.sourceId) + "/" + safeName;
+    const key = prefix + "sources/" + encodeURIComponent(source.sourceId).replaceAll(".", "%2E") + "/" + safeName;
+    keys.push(key);
     await env.BUCKET.put(key, content.bytes, {
       httpMetadata: { contentType: content.contentType },
     });
-    keys.push(key);
     rows.push({
       id: projectId + ":" + source.sourceId,
       externalId: source.sourceId,
@@ -403,14 +403,13 @@ async function createPresentation(
   const uploadedKeys: string[] = [];
 
   try {
-    const uploaded = await putSourceObjects(env, projectId, sources);
-    uploadedKeys.push(...uploaded.keys);
+    const uploaded = await putSourceObjects(env, projectId, sources, uploadedKeys);
     const sourceMap = sourceMapPayload(projectId, uploaded.rows, claims);
     const sourceMapBytes = jsonBytes(sourceMap);
+    uploadedKeys.push(sourceMapKey);
     await env.BUCKET.put(sourceMapKey, sourceMapBytes, {
       httpMetadata: { contentType: "application/json" },
     });
-    uploadedKeys.push(sourceMapKey);
 
     const statements: D1PreparedStatement[] = [
       env.DB.prepare(

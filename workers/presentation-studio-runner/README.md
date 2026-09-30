@@ -48,8 +48,10 @@ otherwise use `specPatch` from ChatGPT directly. A supplied `specPatch` is
 held to the same deterministic validation before render: it may touch only
 existing slides inside the requested `slideIds` scope (when that scope is
 non-empty), only allowed slide fields, and only verified non-sensitive claim
-IDs. The completed version's `changedSlides` is derived from the slides the
-accepted patch actually applied, not the caller-declared scope.
+IDs. The completed version's `changedSlides` lists slides whose JSON values
+differ after applying the accepted patch, in source-spec order. ID-only
+patches and fields restating existing values do not count as changes;
+object property order does not affect this comparison.
 
 For deployment, configure the shared `PRESENTATION_RUNNER_TOKEN` secret on
 both Workers. Configure `CF_AI_ROUTER_API_KEY` only on the runner; it is never

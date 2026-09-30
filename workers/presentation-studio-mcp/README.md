@@ -24,6 +24,9 @@ source content, and claim-to-source mappings. The Worker stores source objects
 under a generated project prefix and only stores the corresponding metadata in
 D1.
 
+Source ID path segments are percent-encoded to keep distinct IDs in separate
+R2 objects. Failed project creation tracks every attempted source upload for cleanup.
+
 create_presentation, revision, and export operations create D1 jobs. The
 separate presentation-studio-runner Worker claims these jobs through a private
 service binding, runs Dashi in a Cloudflare Container, and writes versions,

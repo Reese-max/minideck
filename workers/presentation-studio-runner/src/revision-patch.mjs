@@ -2,6 +2,8 @@
 // Planner-generated and caller-supplied patches both flow through
 // applyRevisionPatch() so neither path can bypass scope, field or claim rules.
 
+import { isDeepStrictEqual } from "node:util";
+
 const MAX_PATCH_BYTES = 200_000;
 
 const ALLOWED_SLIDE_KEYS = new Set([
@@ -100,9 +102,9 @@ export function applyRevisionPatch(input, specPatch) {
   if (!patch) return null;
   const patchedSpec = applySlideSpecPatch(input.spec, patch);
   if (!patchedSpec) return null;
-  const appliedIds = new Set(patch.slides.map((slide) => slide.id));
   const changedSlides = input.spec.slides
-    .filter((slide) => isObject(slide) && typeof slide.id === "string" && appliedIds.has(slide.id))
+    .filter((slide, index) => isObject(slide) && typeof slide.id === "string" &&
+      !isDeepStrictEqual(slide, patchedSpec.slides[index]))
     .map((slide) => slide.id);
   return {
     ...input,

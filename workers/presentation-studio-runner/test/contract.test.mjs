@@ -118,3 +118,41 @@ test("claim fields are each validated against verified non-sensitive ids", async
   const clean = { slides: [{ id: "s1", claims: ["c1"], sourceClaimIds: ["c1"] }] };
   assert.ok(normalizeRevisionPatch(clean, input));
 });
+
+test("changedSlides includes only slides whose JSON values actually change", () => {
+  const input = {
+    spec: {
+      slides: [
+        { id: "s1", keyMessage: "one", content: { title: "One", items: ["a"] } },
+        { id: "s2", keyMessage: "two" },
+        { id: "s3", keyMessage: "three" },
+      ],
+    },
+    sourceMap: { claims: [] },
+    payload: {},
+    changedSlides: ["s1", "s2", "s3"],
+  };
+  const original = structuredClone(input);
+  for (const slide of [
+    { id: "s1" },
+    { id: "s1", keyMessage: "one" },
+    { id: "s1", content: { items: ["a"], title: "One" } },
+  ]) {
+    const result = applyRevisionPatch(input, { slides: [slide] });
+    assert.ok(result);
+    assert.deepEqual(result.spec, input.spec);
+    assert.deepEqual(result.changedSlides, []);
+  }
+
+  const result = applyRevisionPatch(input, {
+    slides: [
+      { id: "s3", keyMessage: "revised-three" },
+      { id: "s1", content: { items: ["b"], title: "One" } },
+      { id: "s2", keyMessage: "two" },
+    ],
+  });
+  assert.deepEqual(result.changedSlides, ["s1", "s3"]);
+  assert.equal(result.spec.slides[0].content.items[0], "b");
+  assert.equal(result.spec.slides[2].keyMessage, "revised-three");
+  assert.deepEqual(input, original);
+});
