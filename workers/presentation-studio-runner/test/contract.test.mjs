@@ -75,6 +75,8 @@ test("completion and workflow-failure reports carry the claim attempt fence", as
   const source = await read("src/mcp-service.ts");
   assert.equal([...source.matchAll(/attemptCount: job\.attemptCount/g)].length, 2);
   assert.match(source, /typeof value\.attemptCount === "number"/);
+  const workflow = await read("src/workflow.ts");
+  assert.match(workflow, /presentation-job-\$\{job\.id\}-attempt-\$\{job\.attemptCount\}/);
 });
 
 test("a stale attempt cannot overwrite the current attempt's R2 artifact", async () => {

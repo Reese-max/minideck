@@ -27,11 +27,13 @@ const EXPIRED_MAX_ATTEMPT_GUARD_SQL =
     "AND expired_guard.leased_until <= datetime('now'))";
 
 export async function recoverExpiredJobLeases(db, createId) {
+  // Bounded per claim: a large expired backlog drains across successive polls
+  // instead of delaying this claim past the Worker time limit.
   const expired = await db.prepare(
     "SELECT id, project_id, job_type, attempt_count, max_attempts " +
       "FROM presentation_jobs WHERE status = 'running' " +
       "AND leased_until IS NOT NULL AND leased_until <= datetime('now') " +
-      "ORDER BY created_at ASC",
+      "ORDER BY created_at ASC LIMIT 100",
   ).all();
 
   let requeued = 0;
@@ -86,7 +88,9 @@ export async function recoverExpiredJobLeases(db, createId) {
 }
 
 export async function runJobCompletion(db, job, statements, finishStatement) {
-  // D1 executes the batch atomically. This guarded write pins the claim attempt before any result writes.
+  // D1 executes the batch atomically. Every result statement carries the
+  // current-attempt guard and the trailing finish CAS requires this claim's
+  // attempt to still own the running job; a stale claimant lands zero changes.
   const results = await db.batch([
     db.prepare(BEGIN_JOB_COMPLETION_SQL).bind(job.id, job.attempt_count),
     ...statements,

@@ -86,7 +86,7 @@ export class PresentationWorkflow extends WorkflowEntrypoint<RunnerEnv, Workflow
           async () => {
             const container = getContainer<DashiContainer>(
               this.env.DASHI_CONTAINER,
-              `presentation-job-${job.id}`,
+              `presentation-job-${job.id}-attempt-${job.attemptCount}`,
             );
             return container.runJob(executionInput) as any;
           },

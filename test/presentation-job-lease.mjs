@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
+import { readFile } from "node:fs/promises";
 import {
   CLAIM_QUEUED_JOB_SQL,
   JOB_COMPLETION_GUARD_SQL,
@@ -136,6 +137,18 @@ const expired = (d1) => d1.row("SELECT datetime('now', '-61 minutes') AS value")
   const d1 = createJobD1();
   const oldJob = d1.seedJob({ attemptCount: 1, maxAttempts: 3, leasedUntil: expired(d1) });
   await recoverExpiredJobLeases(d1, () => "evt-recovery");
+
+  // 回收後尚未被重新 claim 的空窗期：舊 claimant 的完成寫入同樣必須被拒
+  const queuedSideEffect = d1.prepare(
+    "UPDATE presentation_projects SET status = 'failed' WHERE id = ? AND " + JOB_COMPLETION_GUARD_SQL,
+  ).bind("project-1", oldJob.id, oldJob.attempt_count);
+  const queuedFinish = d1.prepare(
+    "UPDATE presentation_jobs SET status = 'failed', leased_until = NULL " +
+      "WHERE id = ? AND status = 'running' AND attempt_count = ?",
+  ).bind(oldJob.id, oldJob.attempt_count);
+  await assert.rejects(runJobCompletion(d1, oldJob, [queuedSideEffect], queuedFinish), /job_lease_not_current/);
+  assert.equal(d1.row("SELECT status FROM presentation_jobs WHERE id = 'job-1'").status, "queued");
+
   assert.equal((await d1.prepare(CLAIM_QUEUED_JOB_SQL).bind("job-1", 1).run()).meta.changes, 1);
 
   const staleSideEffect = d1.prepare(
@@ -161,4 +174,14 @@ const expired = (d1) => d1.row("SELECT datetime('now', '-61 minutes') AS value")
   assert.equal(d1.row("SELECT status FROM presentation_jobs WHERE id = 'job-1'").status, "succeeded");
   assert.equal(d1.row("SELECT status FROM presentation_projects WHERE id = 'project-1'").status, "review");
   console.log("PASS 舊 claimant 遲到回報被拒且新 owner 結果不被覆寫");
+}
+
+// 回收掃描必須有上界：大量過期 backlog 不得在一次 claim 內無限處理
+{
+  const source = await readFile(
+    new URL("../workers/presentation-studio-mcp/src/job-lease.mjs", import.meta.url),
+    "utf8",
+  );
+  assert.match(source, /ORDER BY created_at ASC LIMIT \d+/);
+  console.log("PASS 過期 lease 回收掃描有 LIMIT 上界");
 }
