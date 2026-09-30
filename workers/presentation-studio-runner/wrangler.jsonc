@@ -66,14 +66,112 @@
   "env": {
     "preview": {
       "name": "presentation-studio-runner-preview",
+      "triggers": {
+        "crons": ["*/1 * * * *"]
+      },
+      "workflows": [
+        {
+          "name": "presentation-workflow",
+          "binding": "PRESENTATION_WORKFLOW",
+          "class_name": "PresentationWorkflow"
+        }
+      ],
+      "containers": [
+        {
+          "class_name": "DashiContainer",
+          "image": "./Dockerfile",
+          "max_instances": 3
+        }
+      ],
+      "durable_objects": {
+        "bindings": [
+          {
+            "name": "DASHI_CONTAINER",
+            "class_name": "DashiContainer"
+          }
+        ]
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "presentation-studio",
+          "database_id": "f90f04e3-651d-4280-8325-7466b5dc1765"
+        }
+      ],
+      "r2_buckets": [
+        {
+          "binding": "BUCKET",
+          "bucket_name": "minideck"
+        }
+      ],
+      "services": [
+        {
+          "binding": "MCP_SERVICE",
+          "service": "presentation-studio-mcp"
+        }
+      ],
       "vars": {
-        "POLLING_ENABLED": "false"
+        "ARCHITECTURE_VERSION": "2.0.0",
+        "R2_PREFIX": "presentation-studio/",
+        "POLLING_ENABLED": "false",
+        "MAX_CLAIM_BATCH": "5",
+        "CF_AI_ROUTER_URL": "https://cf-ai-router.irisx-tracker.workers.dev/v1/chat/completions",
+        "CF_AI_ROUTER_MODEL": "free-general"
       }
     },
     "production": {
       "name": "presentation-studio-runner",
+      "triggers": {
+        "crons": ["*/1 * * * *"]
+      },
+      "workflows": [
+        {
+          "name": "presentation-workflow",
+          "binding": "PRESENTATION_WORKFLOW",
+          "class_name": "PresentationWorkflow"
+        }
+      ],
+      "containers": [
+        {
+          "class_name": "DashiContainer",
+          "image": "./Dockerfile",
+          "max_instances": 3
+        }
+      ],
+      "durable_objects": {
+        "bindings": [
+          {
+            "name": "DASHI_CONTAINER",
+            "class_name": "DashiContainer"
+          }
+        ]
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "presentation-studio",
+          "database_id": "f90f04e3-651d-4280-8325-7466b5dc1765"
+        }
+      ],
+      "r2_buckets": [
+        {
+          "binding": "BUCKET",
+          "bucket_name": "minideck"
+        }
+      ],
+      "services": [
+        {
+          "binding": "MCP_SERVICE",
+          "service": "presentation-studio-mcp"
+        }
+      ],
       "vars": {
-        "POLLING_ENABLED": "true"
+        "ARCHITECTURE_VERSION": "2.0.0",
+        "R2_PREFIX": "presentation-studio/",
+        "POLLING_ENABLED": "true",
+        "MAX_CLAIM_BATCH": "5",
+        "CF_AI_ROUTER_URL": "https://cf-ai-router.irisx-tracker.workers.dev/v1/chat/completions",
+        "CF_AI_ROUTER_MODEL": "free-general"
       }
     }
   }

@@ -34,6 +34,8 @@ jobs:
       - run: cd workers/presentation-studio-runner && npx --no-install wrangler types
       - run: cd workers/presentation-studio-runner && npm run check
       - run: cd workers/presentation-studio-runner && npx --no-install wrangler deploy --dry-run
+      - run: cd workers/presentation-studio-runner && npx --no-install wrangler deploy --dry-run --env preview --containers-rollout=none
+      - run: cd workers/presentation-studio-runner && npx --no-install wrangler deploy --dry-run --env production --containers-rollout=none
 
   deploy-preview:
     needs: check
