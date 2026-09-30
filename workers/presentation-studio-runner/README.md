@@ -44,7 +44,12 @@ without Judges is also held for review.
 When a revision contains only an instruction, the Runner's isolated revision
 planner can produce a validated, targeted patch if the router secret is set.
 It may touch only existing slide IDs and verified non-sensitive claim IDs;
-otherwise use `specPatch` from ChatGPT directly.
+otherwise use `specPatch` from ChatGPT directly. A supplied `specPatch` is
+held to the same deterministic validation before render: it may touch only
+existing slides inside the requested `slideIds` scope (when that scope is
+non-empty), only allowed slide fields, and only verified non-sensitive claim
+IDs. The completed version's `changedSlides` is derived from the slides the
+accepted patch actually applied, not the caller-declared scope.
 
 For deployment, configure the shared `PRESENTATION_RUNNER_TOKEN` secret on
 both Workers. Configure `CF_AI_ROUTER_API_KEY` only on the runner; it is never

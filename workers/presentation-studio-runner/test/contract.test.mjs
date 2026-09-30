@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { test } from "node:test";
+import {
+  applyRevisionPatch,
+  normalizeRevisionPatch,
+} from "../src/revision-patch.mjs";
 
 const root = new URL("../", import.meta.url);
 
@@ -64,4 +68,35 @@ test("runs independent judges after Dashi and redacts sensitive claims", async (
   assert.match(await read("runner/execute-job.mjs"), /claimIntegrityCheck/);
   assert.match(await read("src/reviser.ts"), /REVISION_OUTPUT_INVALID_SPEC_PATCH/);
   assert.match(await read("src/workflow.ts"), /plan revision for job/);
+});
+
+test("supplied and planner spec patches share the same scope validation", async () => {
+  const workflow = await read("src/workflow.ts");
+  const reviser = await read("src/reviser.ts");
+  assert.match(workflow, /applyRevisionPatch\(input, suppliedPatch\)/);
+  assert.match(reviser, /revision-patch\.mjs/);
+  assert.match(reviser, /normalizeRevisionPatch/);
+
+  const input = {
+    spec: {
+      slides: [
+        { id: "s1", keyMessage: "one" },
+        { id: "s2", keyMessage: "two" },
+      ],
+    },
+    sourceMap: { claims: [] },
+    payload: {},
+    changedSlides: ["s1"],
+  };
+  const outOfScope = { slides: [{ id: "s2", keyMessage: "tampered" }] };
+  assert.equal(normalizeRevisionPatch(outOfScope, input), null);
+  assert.equal(applyRevisionPatch(input, outOfScope), null);
+
+  const inScope = { slides: [{ id: "s1", keyMessage: "revised" }] };
+  const applied = applyRevisionPatch(input, inScope);
+  assert.ok(applied);
+  assert.equal(applied.spec.slides[0].keyMessage, "revised");
+  assert.equal(applied.spec.slides[1].keyMessage, "two");
+  assert.deepEqual(applied.changedSlides, ["s1"]);
+  assert.equal(applied.payload.specPatch, null);
 });
