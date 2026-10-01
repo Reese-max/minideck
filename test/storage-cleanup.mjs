@@ -77,3 +77,6 @@ const pending = await deleteProjectData(deleteD1, unavailableR2, "project");
 assert.deepEqual(pending, { cleanupPending: 1 });
 assert.equal(deleteBatchCalled, false);
 console.log("PASS D1 失敗時回收 R2；R2 失敗時保留 D1 metadata");
+
+// 連帶執行 presentation job lease recovery 回歸測試（同一生命週期主題）
+await import("./presentation-job-lease.mjs");

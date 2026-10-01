@@ -202,3 +202,9 @@ HTTP 層錯誤一律為 `{"error":"<繁中文案>"}`，常見狀態碼為 403、
 先在 `prompts/styles/` 加入一個 `.md`（只描述配色、字體氣質、版面密度與圖表風格）。由於 Worker 採靜態打包，接著在 `src/minimax.js` 匯入該檔並加入 `STYLE_PROMPTS`；若要在網頁選取，再於 `public/index.html` 的 `#style-select` 加入同名選項。重新啟動 Worker 後即可由 `generate` 的 `style` 欄位使用。
 
 PPTX 與 HTML-to-image 前端函式庫已固定存放於 `public/vendor/`，不從 CDN 載入，也不會進入 Worker runtime 依賴。
+
+## workers/：Presentation Studio v2
+
+`workers/presentation-studio-mcp/` 是 ChatGPT 的遠端 MCP 邊界（D1 專案／工作狀態），`workers/presentation-studio-runner/` 則透過私有 service binding claim 工作、在 Container 中執行 Dashi。兩者各自有獨立的 `package.json`、`npm run check` 與部署 workflow。
+
+工作佇列採 lease 模式：claim 租約 60 分鐘，逾期的 running job 會在下次 claim 前被回收重新排隊（`attempt_count` 保留並遞增），用盡 `max_attempts` 後進入 `blocked` 終態並留下 `job_lease_expired_max_attempts_exhausted` 診斷原因；完成寫入以 `attempt_count` 作為 lease generation 防護，舊 claimant 遲到回報會收到 `job_lease_not_current`（409）。細節見 `workers/presentation-studio-mcp/README.md`，回歸測試見 `test/presentation-job-lease.mjs` 與 `workers/*/test/`。
