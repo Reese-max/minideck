@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
+import { DatabaseSync } from "node:sqlite";
 import { readFile } from "node:fs/promises";
 import { test } from "node:test";
+import { ownerIdFromGithubProfile } from "../src/owner-id.mjs";
 import { runIdempotent } from "../src/idempotency.mjs";
 
 const root = new URL("../", import.meta.url);
@@ -69,6 +71,15 @@ test("does not approve a version before both independent judges complete", async
   assert.match(source, /audit\.factualJudgePass !== true/);
 });
 
+test("uses the immutable GitHub subject for the owner namespace", async () => {
+  assert.equal(ownerIdFromGithubProfile({ id: 12345, login: "renamed-user" }), "github:12345");
+  assert.equal(ownerIdFromGithubProfile({ id: 0, login: "invalid" }), null);
+  assert.equal(ownerIdFromGithubProfile({ id: "12345", login: "invalid" }), null);
+  const source = await read("src/auth.ts");
+  assert.match(source, /ownerIdFromGithubProfile/);
+  assert.doesNotMatch(source, /userBody\.login/);
+});
+
 class IdempotencyD1 {
   rows = new Map();
 
@@ -119,6 +130,68 @@ class IdempotencyD1 {
     };
   }
 }
+
+class SqliteIdempotencyD1 {
+  constructor() {
+    this.db = new DatabaseSync(":memory:");
+    this.db.exec(
+      "CREATE TABLE presentation_idempotency (" +
+        "idempotency_key TEXT PRIMARY KEY, " +
+        "tool_name TEXT NOT NULL, " +
+        "request_hash TEXT NOT NULL, " +
+        "result_json TEXT NOT NULL, " +
+        "expires_at TEXT NOT NULL)",
+    );
+  }
+
+  prepare(sql) {
+    const database = this.db;
+    const values = [];
+    return {
+      bind(...args) {
+        values.push(...args);
+        return this;
+      },
+      async first() {
+        return database.prepare(sql).get(...values) ?? null;
+      },
+      async run() {
+        const info = database.prepare(sql).run(...values);
+        return { meta: { changes: Number(info.changes) } };
+      },
+    };
+  }
+}
+
+test("uses one atomic reservation for concurrent same-owner calls", async () => {
+  const db = new SqliteIdempotencyD1();
+  let effects = 0;
+  const call = () =>
+    runIdempotent(
+      db,
+      "owner-a",
+      "create_presentation",
+      "concurrent-key-01",
+      { brief: "Quarterly review" },
+      async () => undefined,
+      async () => {
+        effects += 1;
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        return { projectId: "project-owner-a" };
+      },
+    );
+
+  const results = await Promise.allSettled([call(), call()]);
+  assert.equal(effects, 1);
+  assert.equal(results.filter((entry) => entry.status === "fulfilled").length, 1);
+  assert.equal(results.filter((entry) => entry.status === "rejected").length, 1);
+  assert.match(
+    results.find((entry) => entry.status === "rejected").reason.message,
+    /REQUEST_IN_PROGRESS/,
+  );
+  assert.deepEqual(await call(), { projectId: "project-owner-a" });
+  assert.equal(effects, 1);
+});
 
 test("idempotency keys are owner-scoped while same-owner create replays are cached", async () => {
   const db = new IdempotencyD1();

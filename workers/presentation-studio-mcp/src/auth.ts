@@ -5,6 +5,7 @@ import {
   sha256Hex,
   verifyPkce,
 } from "./crypto";
+import { ownerIdFromGithubProfile } from "./owner-id.mjs";
 import type { AuthPrincipal, Env } from "./types";
 
 const ACCESS_TOKEN_TTL_MS = 60 * 60 * 1000;
@@ -255,10 +256,7 @@ async function exchangeGithubCode(
     },
   });
   if (!userResponse.ok) return null;
-  const userBody = (await userResponse.json()) as { login?: unknown };
-  return typeof userBody.login === "string" && userBody.login.length <= 200
-    ? userBody.login
-    : null;
+  return ownerIdFromGithubProfile(await userResponse.json());
 }
 
 async function handleCallback(request: Request, env: Env): Promise<Response> {
