@@ -1,5 +1,4 @@
 import { randomId } from "./ids";
-import { sha256Hex } from "./crypto";
 import type {
   Env,
   JobRow,
@@ -28,24 +27,6 @@ export function parseJson<T>(value: string | null | undefined, fallback: T): T {
   } catch {
     return fallback;
   }
-}
-
-export function stableStringify(value: unknown): string {
-  if (value === null || typeof value !== "object") {
-    return JSON.stringify(value) ?? "null";
-  }
-  if (Array.isArray(value)) {
-    return "[" + value.map((item) => stableStringify(item)).join(",") + "]";
-  }
-  const object = value as Record<string, unknown>;
-  return (
-    "{" +
-    Object.keys(object)
-      .sort()
-      .map((key) => JSON.stringify(key) + ":" + stableStringify(object[key]))
-      .join(",") +
-    "}"
-  );
 }
 
 export async function getSystemConfig<T>(
@@ -208,121 +189,5 @@ export async function appendEvent(
         "VALUES (?, ?, ?, ?)",
     )
     .bind(randomId(), projectId, eventType, JSON.stringify(payload))
-    .run();
-}
-
-export interface IdempotencyReservation {
-  key: string;
-  requestHash: string;
-}
-
-export async function beginIdempotency(
-  db: D1Database,
-  toolName: string,
-  idempotencyKey: string | undefined,
-  input: unknown,
-): Promise<{ existing: unknown } | { reservation: IdempotencyReservation } | null> {
-  if (!idempotencyKey) return null;
-  const key = idempotencyKey.trim();
-  if (!/^[A-Za-z0-9._:-]{8,160}$/.test(key)) {
-    throw new Error(
-      "INVALID_IDEMPOTENCY_KEY: use 8-160 letters, numbers, dot, underscore, colon, or hyphen",
-    );
-  }
-
-  const requestHash = await sha256Hex(stableStringify(input));
-  const existing = await db
-    .prepare(
-      "SELECT tool_name, request_hash, result_json, expires_at " +
-        "FROM presentation_idempotency WHERE idempotency_key = ?",
-    )
-    .bind(key)
-    .first<{
-      tool_name: string;
-      request_hash: string;
-      result_json: string;
-      expires_at: string;
-    }>();
-
-  if (existing) {
-    if (new Date(existing.expires_at).getTime() > Date.now()) {
-      if (existing.tool_name !== toolName || existing.request_hash !== requestHash) {
-        throw new Error("IDEMPOTENCY_KEY_REUSED: key belongs to a different request");
-      }
-      if (existing.result_json === "__pending__") {
-        throw new Error("REQUEST_IN_PROGRESS: retry with the same idempotency key later");
-      }
-      return { existing: JSON.parse(existing.result_json) as unknown };
-    }
-    await db
-      .prepare(
-        "DELETE FROM presentation_idempotency " +
-          "WHERE idempotency_key = ? AND expires_at = ?",
-      )
-      .bind(key, existing.expires_at)
-      .run();
-  }
-
-  const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
-  const inserted = await db
-    .prepare(
-      "INSERT OR IGNORE INTO presentation_idempotency " +
-        "(idempotency_key, tool_name, request_hash, result_json, expires_at) " +
-        "VALUES (?, ?, ?, '__pending__', ?)",
-    )
-    .bind(key, toolName, requestHash, expiresAt)
-    .run();
-  if (inserted.meta.changes !== 1) {
-    const current = await db
-      .prepare(
-        "SELECT tool_name, request_hash, result_json, expires_at " +
-          "FROM presentation_idempotency WHERE idempotency_key = ?",
-      )
-      .bind(key)
-      .first<{
-        tool_name: string;
-        request_hash: string;
-        result_json: string;
-        expires_at: string;
-      }>();
-    if (
-      !current ||
-      current.tool_name !== toolName ||
-      current.request_hash !== requestHash
-    ) {
-      throw new Error("IDEMPOTENCY_KEY_REUSED: key belongs to a different request");
-    }
-    if (current.result_json === "__pending__") {
-      throw new Error("REQUEST_IN_PROGRESS: retry with the same idempotency key later");
-    }
-    return { existing: JSON.parse(current.result_json) as unknown };
-  }
-  return { reservation: { key, requestHash } };
-}
-
-export async function finishIdempotency(
-  db: D1Database,
-  reservation: IdempotencyReservation,
-  result: unknown,
-): Promise<void> {
-  await db
-    .prepare(
-      "UPDATE presentation_idempotency SET result_json = ? " +
-        "WHERE idempotency_key = ? AND request_hash = ?",
-    )
-    .bind(JSON.stringify(result), reservation.key, reservation.requestHash)
-    .run();
-}
-
-export async function releaseIdempotency(
-  db: D1Database,
-  reservation: IdempotencyReservation,
-): Promise<void> {
-  await db
-    .prepare(
-      "DELETE FROM presentation_idempotency " +
-        "WHERE idempotency_key = ? AND request_hash = ? AND result_json = '__pending__'",
-    )
-    .bind(reservation.key, reservation.requestHash)
     .run();
 }
