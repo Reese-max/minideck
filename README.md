@@ -22,6 +22,8 @@ npx wrangler d1 execute minideck --remote --file migrations/0002_published_head.
 
 此 migration 會把 `current_version > 0` 的既有專案承接為 `published_version`（`publish_origin = 'migration'`），既有分享連結不中斷；`current_version = 0` 的專案維持未發佈。
 
+本機測試（`npm test`）需要 Node.js ≥ 24：測試以 `node:sqlite` 模擬 D1，Node 22 的 `node:sqlite` 不支援位置參數繫結到 `?N` 形式欄位，會拋 `column index out of range`。建議用 `.nvmrc` 指定版本。
+
 下列範例以 Git Bash／WSL 的 `curl` 語法表示：
 
 ```bash
