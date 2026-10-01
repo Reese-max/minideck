@@ -1,0 +1,102 @@
+name: Deploy Presentation Studio MCP
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Deploy a non-production version or production"
+        required: true
+        type: choice
+        options:
+          - preview
+          - production
+        default: preview
+      confirm_production:
+        description: "Required when target is production"
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: workers/presentation-studio-mcp/package-lock.json
+      - run: cd workers/presentation-studio-mcp && npm ci
+      - run: cd workers/presentation-studio-mcp && npm run check
+      - run: cd workers/presentation-studio-mcp && npx --no-install wrangler deploy --dry-run
+
+  deploy-preview:
+    needs: check
+    if: inputs.target == 'preview'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: workers/presentation-studio-mcp/package-lock.json
+      - run: cd workers/presentation-studio-mcp && npm ci
+      - name: Refresh Cloudflare token
+        id: cf_token
+        env:
+          CF_REFRESH_TOKEN: ${{ secrets.CF_REFRESH_TOKEN }}
+        run: |
+          set -eu
+          response=$(curl -sS -X POST "https://dash.cloudflare.com/oauth2/token" \
+            -d "grant_type=refresh_token&refresh_token=${CF_REFRESH_TOKEN}&client_id=54d11594-84e4-41aa-b438-e81b8fa78ee7")
+          token=$(echo "$response" | jq -r '.access_token')
+          test -n "$token" && test "$token" != "null"
+          echo "::add-mask::$token"
+          echo "token=$token" >> "$GITHUB_OUTPUT"
+      - name: Upload preview version
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ steps.cf_token.outputs.token }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: cd workers/presentation-studio-mcp && npx --no-install wrangler versions upload --var PRESENTATION_RUNNER_STATUS:pending
+
+  deploy-production:
+    needs: check
+    if: inputs.target == 'production' && inputs.confirm_production == true
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: workers/presentation-studio-mcp/package-lock.json
+      - run: cd workers/presentation-studio-mcp && npm ci
+      - name: Refresh Cloudflare token
+        id: cf_token
+        env:
+          CF_REFRESH_TOKEN: ${{ secrets.CF_REFRESH_TOKEN }}
+        run: |
+          set -eu
+          response=$(curl -sS -X POST "https://dash.cloudflare.com/oauth2/token" \
+            -d "grant_type=refresh_token&refresh_token=${CF_REFRESH_TOKEN}&client_id=54d11594-84e4-41aa-b438-e81b8fa78ee7")
+          token=$(echo "$response" | jq -r '.access_token')
+          test -n "$token" && test "$token" != "null"
+          echo "::add-mask::$token"
+          echo "token=$token" >> "$GITHUB_OUTPUT"
+      - name: Deploy production
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ steps.cf_token.outputs.token }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          PRESENTATION_RUNNER_TOKEN: ${{ secrets.PRESENTATION_RUNNER_TOKEN }}
+        run: |
+          set -eu
+          test -n "$PRESENTATION_RUNNER_TOKEN"
+          cd workers/presentation-studio-mcp
+          printf '%s' "$PRESENTATION_RUNNER_TOKEN" | npx --no-install wrangler secret put PRESENTATION_RUNNER_TOKEN
+          npx --no-install wrangler deploy --var PRESENTATION_RUNNER_STATUS:configured
