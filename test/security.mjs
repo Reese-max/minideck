@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
+await import("./runner-wrangler-env.mjs");
+
 const player = await readFile(new URL("../public/play.html", import.meta.url), "utf8");
 const frame = player.match(/<iframe\b[^>]*id="play-deck"[^>]*>/i)?.[0] ?? "";
 

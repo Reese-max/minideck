@@ -32,6 +32,10 @@ jobs:
       - run: cd workers/presentation-studio-runner && npx --no-install wrangler types
       - run: cd workers/presentation-studio-runner && npm run check
       - run: cd workers/presentation-studio-runner && npx --no-install wrangler deploy --dry-run
+      - name: Dry-run the preview named environment config
+        run: cd workers/presentation-studio-runner && npx --no-install wrangler deploy --dry-run --env preview --containers-rollout=none
+      - name: Dry-run the production named environment config
+        run: cd workers/presentation-studio-runner && npx --no-install wrangler deploy --dry-run --env production --containers-rollout=none
 
   container-smoke:
     runs-on: ubuntu-latest
