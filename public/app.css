@@ -475,6 +475,11 @@ a:focus-visible {
   font-size: 0.75rem;
 }
 
+.export-row .share-status {
+  color: var(--secondary);
+  font-weight: 600;
+}
+
 .export-actions {
   display: flex;
   flex-wrap: wrap;
@@ -1042,6 +1047,17 @@ a:focus-visible {
 .version-row time {
   color: var(--muted);
   font-size: 0.66rem;
+}
+
+.version-published {
+  display: inline-block;
+  width: fit-content;
+  margin-top: 2px;
+  padding: 1px 7px;
+  border: 1px solid var(--success);
+  border-radius: 999px;
+  color: var(--success);
+  font-size: 0.62rem;
 }
 
 .version-rollback {

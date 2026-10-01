@@ -4,9 +4,12 @@
   "private": true,
   "type": "module",
   "description": "Cloudflare Worker scaffold for minideck",
+  "engines": {
+    "node": ">=24"
+  },
   "scripts": {
     "dev": "wrangler dev --port 8787",
-    "test": "node --import ./test/register-loader.mjs test/security.mjs && node --import ./test/register-loader.mjs test/token-client.mjs && node --import ./test/register-loader.mjs test/storage-cleanup.mjs && node --import ./test/register-loader.mjs test/frontend.mjs && node --import ./test/register-loader.mjs test/judge-mock.mjs && node --import ./test/register-loader.mjs test/persona-historical-scope.mjs",
+    "test": "node --import ./test/register-loader.mjs test/security.mjs && node --import ./test/register-loader.mjs test/token-client.mjs && node --import ./test/register-loader.mjs test/storage-cleanup.mjs && node --import ./test/register-loader.mjs test/frontend.mjs && node --import ./test/register-loader.mjs test/judge-mock.mjs && node --import ./test/register-loader.mjs test/persona-historical-scope.mjs && node --import ./test/register-loader.mjs test/publish-lifecycle.mjs",
     "check": "npm run test"
   },
   "devDependencies": {

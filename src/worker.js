@@ -22,12 +22,14 @@ import {
   claimProject,
   deleteProjectData,
   getProject,
+  publishDeckVersion,
   readDeck,
   readProjectState,
   readQuotaCounts,
   releaseProject,
   rollbackDeckVersion,
   saveDeckVersion,
+  unpublishDeckVersion,
 } from "./store.js";
 
 function json(data, status = 200) {
@@ -591,6 +593,33 @@ async function saveDeck(request, env, id) {
   }
 }
 
+async function publishDeck(request, env, id) {
+  const access = await authorizeProject(request, env, id);
+  if (access.response) return access.response;
+
+  const body = await requestJson(request);
+  if (!body) return json({ error: "請提供有效的 JSON 請求" }, 400);
+  if (!Number.isInteger(body.version) || body.version < 1) {
+    return json({ error: "版本編號無效" }, 400);
+  }
+
+  const published = await publishDeckVersion(env.DB, env.BUCKET, id, body.version);
+  if (!published) return json({ error: "找不到簡報版本" }, 404);
+  return json({
+    published: true,
+    version: published.version,
+    published_at: published.publishedAt,
+  });
+}
+
+async function unpublishDeck(request, env, id) {
+  const access = await authorizeProject(request, env, id);
+  if (access.response) return access.response;
+
+  await unpublishDeckVersion(env.DB, id);
+  return json({ published: false });
+}
+
 async function deleteProject(request, env, id) {
   const access = await authorizeProject(request, env, id);
   if (access.response) return access.response;
@@ -647,6 +676,13 @@ async function getImageResponse(env, hash) {
   return new Response(object.body, { headers });
 }
 
+// Every anonymous miss on the public player answers with one identical body so
+// a shared link holder cannot tell an unpublished project, a dangling head and a
+// missing project apart by status code or error text.
+function playerNotFound() {
+  return json({ error: "找不到可播放的簡報" }, 404);
+}
+
 async function getPlayerResponse(request, env, id) {
   if (!id || !/^[a-zA-Z0-9_-]{1,64}$/.test(id)) {
     return json({ error: "專案識別碼無效" }, 400);
@@ -661,16 +697,33 @@ async function getPlayerResponse(request, env, id) {
     requestedVersion = Number(versionText);
   }
 
-  const result = await readDeck(env.DB, env.BUCKET, id, requestedVersion);
-  if (!result.project) return json({ error: "專案不存在" }, 404);
-  if (!result.deck) return json({ error: "找不到簡報版本" }, 404);
+  const project = await getProject(env.DB, id);
+  if (!project) return playerNotFound();
 
-  if (requestedVersion !== null && requestedVersion !== Number(result.project.current_version)) {
+  // The public player only ever serves published_version. Any other version
+  // is a draft preview reserved for the owner behind X-Project-Token.
+  const publishedVersion = Number(project.published_version ?? 0);
+  const version = requestedVersion ?? publishedVersion;
+
+  if (version !== publishedVersion) {
     const token = request.headers.get("X-Project-Token")?.trim();
-    if (!(await verifyProjectToken(token, result.project.access_token_hash))) {
-      return json({ error: "歷史版本不公開，需專案權杖" }, 403);
+    if (!(await verifyProjectToken(token, project.access_token_hash))) {
+      // An unpublished project answers every anonymous path with 404 so the
+      // existence of drafts cannot be probed through status codes. A head that
+      // no longer renders is treated the same way, so a 403 can never confirm
+      // that a project exists and once had a public head.
+      if (publishedVersion < 1) return playerNotFound();
+      const head = await readDeck(env.DB, env.BUCKET, id, publishedVersion);
+      if (!head.project || !head.deck) return playerNotFound();
+      return json({ error: "版本未公開發佈，需專案權杖" }, 403);
     }
   }
+  if (!Number.isInteger(version) || version < 1) return playerNotFound();
+
+  const result = await readDeck(env.DB, env.BUCKET, id, version);
+  // A concurrent DELETE can still retire the project between the two reads.
+  if (!result.project) return playerNotFound();
+  if (!result.deck) return playerNotFound();
 
   const templateResponse = await env.ASSETS.fetch(
     new URL("/play.html", request.url),
@@ -685,7 +738,7 @@ async function getPlayerResponse(request, env, id) {
   }
 
   return new Response(
-    template.replace("__MINIDECK_DECK_HTML__", escapeHtml(deck)),
+    template.replace("__MINIDECK_DECK_HTML__", () => escapeHtml(deck)),
     {
       headers: {
         "cache-control": "no-store",
@@ -716,7 +769,7 @@ export default {
       }
 
       const actionMatch = url.pathname.match(
-        /^\/api\/projects\/([^/]+)\/(generate|revise|image|rollback|judge)$/,
+        /^\/api\/projects\/([^/]+)\/(generate|revise|image|rollback|judge|publish|unpublish)$/,
       );
       if (actionMatch && request.method === "POST") {
         const [, id, action] = actionMatch;
@@ -726,6 +779,8 @@ export default {
         if (action === "revise") return await reviseDeck(request, env, ctx, id);
         if (action === "rollback") return await rollbackDeck(request, env, id);
         if (action === "judge") return await judgeDeckVersion(request, env, id);
+        if (action === "publish") return await publishDeck(request, env, id);
+        if (action === "unpublish") return await unpublishDeck(request, env, id);
         return await generateProjectImage(request, env, id);
       }
 
@@ -754,6 +809,11 @@ export default {
       return json({ error: "找不到此路由" }, 404);
     } catch (error) {
       console.error("request_failed", error);
+      // A missing migration is an operator error, not a runtime fault: name it
+      // instead of hiding it behind a generic 500 that only the logs explain.
+      if (/D1 schema|缺少 DB 綁定/.test(String(error?.message ?? ""))) {
+        return json({ error: error.message }, 503);
+      }
       return json({ error: "服務處理失敗" }, 500);
     }
   },

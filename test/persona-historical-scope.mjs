@@ -196,7 +196,28 @@ try {
   assert.equal(saveV2Res.status, 200);
   assert.deepEqual(await saveV2Res.json(), { version: 2 });
 
-  // 4. Test Scenario: Unrelated anonymous recipient views the normal shared link /p/<id>
+  // 4. Test Scenario: anonymous recipient sees nothing until the owner publishes
+  const anonUnpublished = await worker.fetch(
+    new Request(`https://minideck.test/p/${projectId}`),
+    mockEnv,
+  );
+  assert.equal(anonUnpublished.status, 404);
+  console.log("PASS 未發佈專案的匿名分享連結不回傳草稿 (404)");
+
+  const publishRes = await worker.fetch(
+    new Request(`https://minideck.test/api/projects/${projectId}/publish`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "X-Project-Token": projectToken,
+      },
+      body: JSON.stringify({ version: 2 }),
+    }),
+    mockEnv,
+  );
+  assert.equal(publishRes.status, 200);
+  assert.equal((await publishRes.json()).version, 2);
+
   const anonPlayerRes = await worker.fetch(
     new Request(`https://minideck.test/p/${projectId}`),
     mockEnv,
@@ -206,7 +227,7 @@ try {
   assert.match(anonPlayerHtml, /公司估值公開版/);
   assert.doesNotMatch(anonPlayerHtml, new RegExp(DRAFT_SECRET));
   assert.doesNotMatch(anonPlayerHtml, new RegExp(projectToken));
-  console.log("PASS 公開分享頁正常載入最新版，未洩露草稿機密與權杖");
+  console.log("PASS 公開分享頁只呈現已發佈版本，未洩露草稿機密與權杖");
 
   // 5. Test Regression: Anonymous caller derives /api/projects/:id/deck?version=1
   const anonV1DeckRes = await worker.fetch(
@@ -234,14 +255,14 @@ try {
   assert.equal(anonPlayerV1Res.status, 403);
   console.log("PASS 匿名存取歷史播放頁 /p/:id?version=1 被拒絕 (403)");
 
-  // 8. Test: Anonymous caller visits /p/:id?version=2 (matching current_version)
+  // 8. Test: Anonymous caller visits /p/:id?version=2 (matching published_version)
   const anonPlayerV2Res = await worker.fetch(
     new Request(`https://minideck.test/p/${projectId}?version=2`),
     mockEnv,
   );
   assert.equal(anonPlayerV2Res.status, 200);
   assert.match(await anonPlayerV2Res.text(), /公司估值公開版/);
-  console.log("PASS 匿名存取當前版本播放頁 /p/:id?version=2 正常播放");
+  console.log("PASS 匿名存取已發佈版本播放頁 /p/:id?version=2 正常播放");
 
   // 9. Test: Owner with X-Project-Token can inspect historical v1 and current v2
   const ownerV1Res = await worker.fetch(
@@ -266,7 +287,7 @@ try {
   assert.match(ownerV2Html, /公司估值公開版/);
   console.log("PASS 擁有者使用 X-Project-Token 可正常讀取版本 v2");
 
-  // 10. Test: Rollback does not silently expose unintended historical versions
+  // 10. Test: Rollback creates a new draft but never moves the public head
   const rollbackRes = await worker.fetch(
     new Request(`https://minideck.test/api/projects/${projectId}/rollback`, {
       method: "POST",
@@ -281,27 +302,51 @@ try {
   assert.equal(rollbackRes.status, 200);
   assert.deepEqual(await rollbackRes.json(), { version: 3 });
 
-  // Anonymous user accessing /p/:id now sees v3 (rolled-back to v1)
+  // Anonymous user still sees published v2 — the rolled-back draft stays private
   const anonRolledRes = await worker.fetch(
     new Request(`https://minideck.test/p/${projectId}`),
     mockEnv,
   );
   assert.equal(anonRolledRes.status, 200);
-  assert.match(await anonRolledRes.text(), new RegExp(DRAFT_SECRET));
+  const anonRolledHtml = await anonRolledRes.text();
+  assert.match(anonRolledHtml, /公司估值公開版/);
+  assert.doesNotMatch(anonRolledHtml, new RegExp(DRAFT_SECRET));
 
-  // Anonymous user cannot access superseded version v2
+  const anonPlayerV3Res = await worker.fetch(
+    new Request(`https://minideck.test/p/${projectId}?version=3`),
+    mockEnv,
+  );
+  assert.equal(anonPlayerV3Res.status, 403);
+  console.log("PASS 回退產生的 v3 為草稿，公開連結仍播放已發佈的 v2");
+
+  // Anonymous user cannot access superseded version v2 through deck API
   const anonV2DeckRes = await worker.fetch(
     new Request(`https://minideck.test/api/projects/${projectId}/deck?version=2`),
     mockEnv,
   );
   assert.equal(anonV2DeckRes.status, 403);
 
-  const anonPlayerV2AfterRollback = await worker.fetch(
-    new Request(`https://minideck.test/p/${projectId}?version=2`),
+  // Only an explicit publish exposes the rolled-back content
+  const publishV3Res = await worker.fetch(
+    new Request(`https://minideck.test/api/projects/${projectId}/publish`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "X-Project-Token": projectToken,
+      },
+      body: JSON.stringify({ version: 3 }),
+    }),
     mockEnv,
   );
-  assert.equal(anonPlayerV2AfterRollback.status, 403);
-  console.log("PASS 回退至 v1 後，被取代的歷史版本 v2 仍嚴格受保護 (403)");
+  assert.equal(publishV3Res.status, 200);
+
+  const anonPublishedV3 = await worker.fetch(
+    new Request(`https://minideck.test/p/${projectId}`),
+    mockEnv,
+  );
+  assert.equal(anonPublishedV3.status, 200);
+  assert.match(await anonPublishedV3.text(), new RegExp(DRAFT_SECRET));
+  console.log("PASS 僅 explicit publish 才讓回退版本對外公開");
 
   // 11. Test: Revocation & Deletion semantics
   const deleteRes = await worker.fetch(

@@ -188,6 +188,12 @@
     judge(id, version) {
       return jsonRequest(`/api/projects/${id}/judge`, { version }, id);
     },
+    publish(id, version) {
+      return jsonRequest(`/api/projects/${id}/publish`, { version }, id);
+    },
+    unpublish(id) {
+      return jsonRequest(`/api/projects/${id}/unpublish`, {}, id);
+    },
     getDeck(id, version) {
       return fetchDeck(id, version);
     },
@@ -563,6 +569,10 @@
   const pdfButton = document.querySelector("#btn-pdf");
   const pptxButton = document.querySelector("#btn-pptx");
   const shareButton = document.querySelector("#btn-share");
+  const publishButton = document.querySelector("#btn-publish");
+  const unpublishButton = document.querySelector("#btn-unpublish");
+  const previewPublicButton = document.querySelector("#btn-preview-public");
+  const shareStatus = document.querySelector("[data-share-status]");
   const downloadButtons = [htmlButton, pdfButton, pptxButton, shareButton];
   const versionList = document.querySelector("#version-list");
   const previewVersion = document.querySelector("[data-preview-version]");
@@ -582,6 +592,7 @@
   let currentAudit = null;
   let currentProjectId = "";
   let currentDeckVersion = 0;
+  let publishState = { currentVersion: 0, publishedVersion: null };
   let iterationRunning = false;
   let iterationStopRequested = false;
 
@@ -607,7 +618,26 @@
     downloadButtons.forEach((button) => {
       button.disabled = busy || !currentProjectId || !currentDeckVersion;
     });
+    renderShareStatus();
     form.setAttribute("aria-busy", String(busy));
+  }
+
+  function renderShareStatus() {
+    const { currentVersion, publishedVersion } = publishState;
+    if (!currentProjectId || !currentVersion) {
+      shareStatus.textContent = "尚未發佈";
+    } else if (publishedVersion === null) {
+      shareStatus.textContent = `草稿 v${currentVersion} · 尚未發佈`;
+    } else {
+      const pending = Math.max(0, currentVersion - publishedVersion);
+      shareStatus.textContent = pending
+        ? `草稿 v${currentVersion} · 已發佈 v${publishedVersion} · ${pending} 個未發佈變更`
+        : `草稿 v${currentVersion} · 已發佈 v${publishedVersion}（最新）`;
+    }
+    previewPublicButton.disabled = busy || !currentProjectId || !currentDeckVersion;
+    publishButton.disabled = busy || !currentProjectId || !currentDeckVersion;
+    unpublishButton.disabled =
+      busy || !currentProjectId || publishedVersion === null;
   }
 
   function syncHqMode() {
@@ -731,6 +761,12 @@
       time.dateTime = new Date(item.created_at).toISOString();
       time.textContent = formatTime(item.created_at);
       meta.append(title, time);
+      if (item.version === publishState.publishedVersion) {
+        const badge = document.createElement("span");
+        badge.className = "version-published";
+        badge.textContent = "已發佈";
+        meta.append(badge);
+      }
 
       const button = document.createElement("button");
       button.className = "outline-button version-rollback";
@@ -749,8 +785,7 @@
             `source=${item.version}`,
             `version=${result.version}`,
           );
-          const project = await MD.api.getProject(id);
-          renderVersions(id, project.versions);
+          await refreshVersions(id);
           await loadPreview(id, result.version);
           currentProjectId = id;
           await auditAndFix(id, false);
@@ -768,7 +803,13 @@
 
   async function refreshVersions(id) {
     const project = await MD.api.getProject(id);
+    publishState = {
+      currentVersion:
+        project.current_version ?? project.versions.at(-1)?.version ?? 0,
+      publishedVersion: project.published_version ?? null,
+    };
     renderVersions(id, project.versions);
+    renderShareStatus();
     iteratePanel.querySelector(".iterate-quota").textContent = `已用修訂額度 ${reviseQuotaUsed(project)} / 6`;
     return project;
   }
@@ -1281,6 +1322,8 @@ html,body{margin:0!important;padding:0!important;background:#fff!important}
     currentAudit = null;
     currentProjectId = "";
     currentDeckVersion = 0;
+    publishState = { currentVersion: 0, publishedVersion: null };
+    shareStatus.textContent = "尚未發佈";
     iterationRunning = false;
     iterationStopRequested = false;
     resetIterationPanel();
@@ -1336,8 +1379,68 @@ html,body{margin:0!important;padding:0!important;background:#fff!important}
 
   shareButton.addEventListener("click", () =>
     runExport(shareButton, "複製分享連結", async () => {
+      if (
+        publishState.publishedVersion === null &&
+        !confirm("尚未發佈任何版本，收件者暫時無法開啟連結。仍要複製嗎？")
+      ) {
+        return;
+      }
       const url = await MD.exportx.share();
       console.log("MD share_link_copied", url);
+    }),
+  );
+
+  previewPublicButton.addEventListener("click", () =>
+    runExport(previewPublicButton, "公開預覽", async () => {
+      const response = await fetch(
+        `/p/${currentProjectId}?version=${currentDeckVersion}`,
+        { cache: "no-store", headers: projectHeaders(currentProjectId) },
+      );
+      if (!response.ok) throw await apiError(response);
+      const html = await response.text();
+      if (!html.includes("<head>")) throw new Error("公開預覽頁面格式異常");
+      const previewHtml = html.replace(
+        "<head>",
+        `<head><base href="${location.origin}/">`,
+      );
+      const url = URL.createObjectURL(
+        new Blob([previewHtml], { type: "text/html" }),
+      );
+      const opened = window.open(url, "_blank", "noopener");
+      if (opened) {
+        opened.addEventListener("load", () => URL.revokeObjectURL(url), {
+          once: true,
+        });
+      } else {
+        URL.revokeObjectURL(url);
+      }
+      console.log(
+        "MD public_preview_opened",
+        `project=${currentProjectId}`,
+        `version=${currentDeckVersion}`,
+      );
+    }),
+  );
+
+  publishButton.addEventListener("click", () =>
+    runExport(publishButton, "發佈", async () => {
+      if (!confirm(`發佈預覽中的 v${currentDeckVersion} 為公開版本？`)) return;
+      const result = await MD.api.publish(currentProjectId, currentDeckVersion);
+      console.log(
+        "MD publish_done",
+        `project=${currentProjectId}`,
+        `version=${result.version}`,
+      );
+      await refreshVersions(currentProjectId);
+    }),
+  );
+
+  unpublishButton.addEventListener("click", () =>
+    runExport(unpublishButton, "下線", async () => {
+      if (!confirm("確定下線公開分享連結？專案與所有草稿版本會保留。")) return;
+      await MD.api.unpublish(currentProjectId);
+      console.log("MD unpublish_done", `project=${currentProjectId}`);
+      await refreshVersions(currentProjectId);
     }),
   );
 
