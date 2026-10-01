@@ -9,4 +9,3 @@ export declare function runIdempotent<AuthorizedContext, Result>(
   authorize: () => AuthorizedContext | Promise<AuthorizedContext>,
   action: (authorizedContext: AuthorizedContext) => Promise<Result>,
 ): Promise<Result>;
-
