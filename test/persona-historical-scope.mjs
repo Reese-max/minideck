@@ -16,6 +16,10 @@ function createD1() {
   return {
     prepare(sql) {
       let bound = [];
+      const params = () =>
+        /\?\d/.test(sql)
+          ? [Object.fromEntries(bound.map((value, index) => [String(index + 1), value]))]
+          : bound;
       return {
         bind(...args) {
           bound = args;
@@ -23,15 +27,15 @@ function createD1() {
         },
         async first() {
           const stmt = db.prepare(sql);
-          return stmt.get(...bound) ?? null;
+          return stmt.get(...params()) ?? null;
         },
         async all() {
           const stmt = db.prepare(sql);
-          return { results: stmt.all(...bound) };
+          return { results: stmt.all(...params()) };
         },
         async run() {
           const stmt = db.prepare(sql);
-          const info = stmt.run(...bound);
+          const info = stmt.run(...params());
           return { meta: { changes: Number(info.changes) } };
         },
       };
