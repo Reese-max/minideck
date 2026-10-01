@@ -1,0 +1,56 @@
+[
+  {
+    "id": "s01",
+    "role": "cover",
+    "priority": "high",
+    "content": {
+      "presentation": {
+        "title": "資安事件處理閉環",
+        "titleShort": "資安事件處理閉環",
+        "summary": "以偵測、分級、通報、處置及復原串起事件流程。",
+        "summaryShort": "事件處理流程",
+        "takeaway": "建立可追蹤且可復原的處理節奏。",
+        "items": []
+      },
+      "meta": { "pageLabel": "01", "panelTitle": "資安實習報告" }
+    }
+  },
+  {
+    "id": "s02",
+    "role": "process",
+    "priority": "high",
+    "content": {
+      "presentation": {
+        "title": "五個處理節點",
+        "titleShort": "五個處理節點",
+        "summary": "事件由偵測開始，經分級、通報、處置，最後完成復原。",
+        "summaryShort": "偵測到復原",
+        "takeaway": "每個節點都留下可驗證的紀錄。",
+        "items": [
+          { "label": "偵測", "detail": "發現異常" },
+          { "label": "分級", "detail": "判定影響" },
+          { "label": "通報", "detail": "通知責任人" },
+          { "label": "處置", "detail": "隔離與修復" },
+          { "label": "復原", "detail": "恢復服務" }
+        ]
+      },
+      "meta": { "pageLabel": "02", "panelTitle": "事件處理" }
+    }
+  },
+  {
+    "id": "s03",
+    "role": "closing",
+    "priority": "normal",
+    "content": {
+      "presentation": {
+        "title": "結論與下一步",
+        "titleShort": "結論與下一步",
+        "summary": "將流程標準化並持續驗證控制成效。",
+        "summaryShort": "標準化與驗證",
+        "takeaway": "把一次性處理轉成可重複的能力。",
+        "items": []
+      },
+      "meta": { "pageLabel": "03", "panelTitle": "結語" }
+    }
+  }
+]
