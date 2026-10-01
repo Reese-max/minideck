@@ -168,23 +168,6 @@ function hasDashiGoal(spec) {
   );
 }
 
-function patchSpec(spec, patch) {
-  if (!isObject(patch)) return spec;
-  const next = { ...spec, ...patch };
-  if (Array.isArray(patch.slides) && Array.isArray(spec.slides)) {
-    const patches = new Map(
-      patch.slides
-        .filter((slide) => isObject(slide) && typeof slide.id === "string")
-        .map((slide) => [slide.id, slide]),
-    );
-    next.slides = spec.slides.map((slide) => {
-      if (!isObject(slide) || typeof slide.id !== "string" || !patches.has(slide.id)) return slide;
-      return { ...slide, ...patches.get(slide.id) };
-    });
-  }
-  return next;
-}
-
 async function writeSources(input, workDir) {
   // Source bytes remain in R2 and are intentionally not copied through the
   // Workflow RPC payload. Dashi renders the ChatGPT-first spec; later judges
@@ -196,12 +179,16 @@ async function writeSources(input, workDir) {
 async function prepareGoal(input, workDir) {
   const goalPath = join(workDir, "goal.json");
   const payload = isObject(input.payload) ? input.payload : {};
-  let spec = isObject(input.spec) ? input.spec : null;
+  const spec = isObject(input.spec) ? input.spec : null;
   const hasPatch = isObject(payload.specPatch);
-  if (input.type === "revision" && !hasPatch && !spec) {
+  // specPatch must be validated and applied by the Workflow before dispatch;
+  // a residual patch reaching the container is a validation bypass, not input.
+  if (hasPatch) {
+    return { blocked: "SPEC_PATCH_REQUIRES_WORKFLOW_VALIDATION" };
+  }
+  if (input.type === "revision" && !spec) {
     return { blocked: "REVISION_REQUIRES_SPEC_PATCH" };
   }
-  if (spec && hasPatch) spec = patchSpec(spec, payload.specPatch);
   if (spec && hasDashiGoal(spec)) {
     const goal = {
       ...spec,

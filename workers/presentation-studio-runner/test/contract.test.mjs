@@ -119,6 +119,12 @@ test("claim fields are each validated against verified non-sensitive ids", async
   assert.ok(normalizeRevisionPatch(clean, input));
 });
 
+test("runner refuses residual caller specPatch instead of merging it", async () => {
+  const source = await read("runner/execute-job.mjs");
+  assert.match(source, /SPEC_PATCH_REQUIRES_WORKFLOW_VALIDATION/);
+  assert.doesNotMatch(source, /patchSpec/);
+});
+
 test("changedSlides includes only slides whose JSON values actually change", () => {
   const input = {
     spec: {

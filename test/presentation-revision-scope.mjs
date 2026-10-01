@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import {
   applyRevisionPatch,
   applySlideSpecPatch,
@@ -180,6 +182,56 @@ function makeInput(overrides = {}) {
   assert.equal(merged.slides[0].keyMessage, "merged");
   assert.equal(merged.slides[0].role, "intro");
   console.log("PASS slide merge 僅覆寫 patch 提供的欄位");
+}
+
+// 14. 容器端第二道防線：execute-job 不得套用未經 Workflow 驗證的殘留 specPatch
+{
+  const runnerPath = fileURLToPath(
+    new URL("../workers/presentation-studio-runner/runner/execute-job.mjs", import.meta.url),
+  );
+  const runExecuteJob = (input) =>
+    new Promise((resolve, reject) => {
+      const child = spawn(process.execPath, [runnerPath], {
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+      let out = "";
+      let err = "";
+      child.stdout.on("data", (chunk) => (out += chunk));
+      child.stderr.on("data", (chunk) => (err += chunk));
+      child.on("error", reject);
+      child.on("close", () => {
+        try {
+          resolve(JSON.parse(out.trim().split("\n").pop()));
+        } catch {
+          reject(new Error(`execute-job produced no JSON result: ${err || out}`));
+        }
+      });
+      child.stdin.end(JSON.stringify(input));
+    });
+
+  const bypassAttempt = await runExecuteJob({
+    jobId: "job-13-container-guard",
+    type: "revision",
+    spec: { schemaVersion: 1, slides: [{ id: "s1", keyMessage: "orig" }] },
+    sourceMap: { claims: [] },
+    sources: [],
+    payload: { specPatch: { slides: [{ id: "s1", keyMessage: "tampered" }] } },
+    changedSlides: ["s1"],
+  });
+  assert.equal(bypassAttempt.status, "blocked");
+  assert.equal(bypassAttempt.error, "SPEC_PATCH_REQUIRES_WORKFLOW_VALIDATION");
+
+  const consumedPatch = await runExecuteJob({
+    jobId: "job-13-container-ok",
+    type: "revision",
+    spec: { schemaVersion: 1, slides: [{ id: "s1", keyMessage: "revised" }] },
+    sourceMap: { claims: [] },
+    sources: [],
+    payload: { specPatch: null },
+    changedSlides: ["s1"],
+  });
+  assert.notEqual(consumedPatch.error, "SPEC_PATCH_REQUIRES_WORKFLOW_VALIDATION");
+  console.log("PASS 容器端拒絕未經 Workflow 驗證的殘留 specPatch（已消費的 patch 不受影響）");
 }
 
 console.log("ALL PRESENTATION REVISION SCOPE ACCEPTANCE CRITERIA PASSED");
