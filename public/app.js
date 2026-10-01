@@ -1398,6 +1398,7 @@ html,body{margin:0!important;padding:0!important;background:#fff!important}
       );
       if (!response.ok) throw await apiError(response);
       const html = await response.text();
+      if (!html.includes("<head>")) throw new Error("公開預覽頁面格式異常");
       const previewHtml = html.replace(
         "<head>",
         `<head><base href="${location.origin}/">`,

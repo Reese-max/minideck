@@ -151,7 +151,12 @@ try {
   assert.equal(anonDraftProbe.status, 404);
   const anonState = await api(id, "");
   assert.equal(anonState.status, 403);
-  console.log("PASS 未發佈專案的匿名 /p/:id 回 404，不暴露草稿；參數與狀態端點同步受控");
+  const anonDeck = await api(id, "/deck?version=1");
+  assert.equal(anonDeck.status, 403);
+  const ownerDraftPreview = await player(id, { version: 1, token });
+  assert.equal(ownerDraftPreview.status, 200);
+  assert.match(await ownerDraftPreview.text(), /VERSION_ONE_PUBLIC/);
+  console.log("PASS 未發佈專案的匿名 /p/:id 回 404，不暴露草稿；owner 權杖可預覽草稿");
 
   // 2. Publish requires a valid project token.
   const pubNoToken = await publish(id, undefined, 1);
