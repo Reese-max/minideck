@@ -20,6 +20,7 @@ import {
   stableStringify,
 } from "./db";
 import { randomId, randomSeed, randomWorkflowRunId } from "./ids";
+import { specSlideIds, visualCoverageSatisfied } from "./visual-coverage.mjs";
 import type {
   ArtifactRow,
   AuditSummary,
@@ -932,6 +933,20 @@ function approvalDecision(
     audit.everySlideScoreMin < policy.minimumSlideScore
   ) {
     reasons.push("slide_score_below_target_or_missing");
+  }
+  const versionSpec = parseJson<{ slides?: unknown }>(version.spec_json, {});
+  const expectedSlideIds = specSlideIds(versionSpec);
+  const expectedSlideCount = Array.isArray(versionSpec.slides)
+    ? versionSpec.slides.length
+    : 0;
+  if (
+    !visualCoverageSatisfied(
+      audit.visualCoverage,
+      expectedSlideIds,
+      expectedSlideCount,
+    )
+  ) {
+    reasons.push("visual_coverage_incomplete");
   }
   if ((audit.blockerCount ?? 0) > 0) reasons.push("blockers_present");
   if ((audit.majorIssueCount ?? 0) > 0) reasons.push("major_issues_present");

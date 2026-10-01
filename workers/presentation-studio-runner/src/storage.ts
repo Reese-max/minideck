@@ -19,6 +19,20 @@ const ARTIFACTS: Record<
   pdf: { fileName: "deck.pdf", mimeType: "application/pdf" },
 };
 
+// Additional visual-judge contact sheets upload as preview-2..preview-5 so
+// decks beyond one 20-tile sheet keep fixed, derived artifact kinds; the bound
+// matches MAX_PREVIEW_SHEETS for the 100-slide contract (5 x 20 tiles).
+const PREVIEW_SHEET_KIND = /^preview-[2-5]$/;
+
+function artifactDescriptor(kind: string): { fileName: string; mimeType: string } | null {
+  const fixed = ARTIFACTS[kind];
+  if (fixed) return fixed;
+  if (PREVIEW_SHEET_KIND.test(kind)) {
+    return { fileName: `${kind}.png`, mimeType: "image/png" };
+  }
+  return null;
+}
+
 function projectPrefix(env: Env, projectId: string): string {
   const configured = env.R2_PREFIX?.trim() || "presentation-studio/";
   const prefix = configured.endsWith("/") ? configured : configured + "/";
@@ -44,7 +58,8 @@ export async function handleContainerStorage(request: Request, env: RunnerEnv): 
   }
   if (request.method !== "PUT") return jsonResponse({ error: "storage_method_not_allowed" }, 405);
   const [, jobId, kind] = segments;
-  if (!isUuid(jobId) || !isSafeKind(kind) || !ARTIFACTS[kind]) {
+  const descriptor = isSafeKind(kind) ? artifactDescriptor(kind) : null;
+  if (!isUuid(jobId) || !descriptor) {
     return jsonResponse({ error: "storage_artifact_not_allowed" }, 400);
   }
   const job = await isRunningJobId(env, jobId);
@@ -62,7 +77,6 @@ export async function handleContainerStorage(request: Request, env: RunnerEnv): 
     return jsonResponse({ error: "storage_artifact_too_large" }, 413);
   }
 
-  const descriptor = ARTIFACTS[kind];
   const r2Key = `${projectPrefix(env, job.project_id)}jobs/${jobId}/${descriptor.fileName}`;
   const digest = await sha256Hex(bytes);
   await env.BUCKET.put(r2Key, bytes, {

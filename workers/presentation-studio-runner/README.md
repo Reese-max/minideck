@@ -54,3 +54,10 @@ The Dashi render result is passed to two separate Judge calls. A technically
 rendered deck is reviewable, but cannot be approved or exported until both
 independent Judge results are present, pass, and are recorded in the audit
 contract.
+
+The visual Judge is fed one contact sheet per batch of at most 20 slides
+(preview, preview-2, ... artifacts), and the audit records a visualCoverage
+receipt with the evaluated slide ids. If the screenshots do not cover every
+slide in the version's spec — for example a deck larger than one sheet — the
+Judges fail closed with VISUAL_COVERAGE_INCOMPLETE and no approvable audit is
+produced.

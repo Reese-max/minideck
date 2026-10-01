@@ -29,7 +29,9 @@ separate presentation-studio-runner Worker claims these jobs through a private
 service binding, runs Dashi in a Cloudflare Container, and writes versions,
 audits, and artifacts back to D1/R2. The MCP Worker never renders inline.
 approve_presentation fails closed until the recorded audit satisfies the
-quality contract.
+quality contract, including a visualCoverage receipt whose evaluated slide ids
+must exactly match the version's slide set — a deck whose visual Judge saw only
+a subset of slides cannot be approved.
 
 The runner-only endpoints are POST /internal/jobs/claim and
 POST /internal/jobs/complete. They require the PRESENTATION_RUNNER_TOKEN

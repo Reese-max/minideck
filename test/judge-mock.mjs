@@ -48,3 +48,5 @@ assert.equal(minimaxCalls, 0);
 const endpointStatus = reservation.accepted ? 200 : 429;
 assert.equal(endpointStatus, 429);
 console.log("PASS judge 額度不足回 429 且 MiniMax 呼叫數為 0");
+
+await import("./visual-coverage.mjs");

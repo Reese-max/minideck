@@ -105,8 +105,15 @@ const saveDeck = await fetch(`${BASE_URL}/api/projects/${projectId}/deck`, {
 assert.equal(saveDeck.status, 200);
 assert.deepEqual(await saveDeck.json(), { version: 1 });
 
+const unauthorizedDeck = await fetch(
+  `${BASE_URL}/api/projects/${projectId}/deck?version=1`,
+);
+assert.equal(unauthorizedDeck.status, 403);
+console.log("PASS 簡報讀取缺少權杖 -> 403");
+
 const deck = await fetch(
   `${BASE_URL}/api/projects/${projectId}/deck?version=1`,
+  { headers: projectHeaders(projectToken) },
 );
 assert.equal(deck.status, 200);
 assert.equal(await deck.text(), fixture);
@@ -130,8 +137,15 @@ const rollback = await fetch(
 );
 assert.equal(rollback.status, 200);
 assert.deepEqual(await rollback.json(), { version: 3 });
+
+const unauthorizedRolledBackDeck = await fetch(
+  `${BASE_URL}/api/projects/${projectId}/deck?version=3`,
+);
+assert.equal(unauthorizedRolledBackDeck.status, 403);
+
 const rolledBackDeck = await fetch(
   `${BASE_URL}/api/projects/${projectId}/deck?version=3`,
+  { headers: projectHeaders(projectToken) },
 );
 assert.equal(rolledBackDeck.status, 200);
 assert.equal(await rolledBackDeck.text(), fixture);
