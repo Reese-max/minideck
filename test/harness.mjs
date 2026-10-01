@@ -13,6 +13,11 @@ export function createD1(schemaFile = "../schema.sql") {
   }
 
   return {
+    // Raw escape hatch for fixtures that need to seed or damage rows the
+    // product API never exposes.
+    exec(sql) {
+      return db.exec(sql);
+    },
     prepare(sql) {
       let bound = [];
       return {
@@ -36,11 +41,21 @@ export function createD1(schemaFile = "../schema.sql") {
       };
     },
     async batch(statements) {
-      const results = [];
-      for (const stmt of statements) {
-        results.push(await stmt.all());
+      // D1 runs a batch inside a single transaction: a statement that throws
+      // leaves none of the batch's writes behind. Model that here, otherwise
+      // "no partial state" assertions are vacuously true.
+      db.exec("BEGIN");
+      try {
+        const results = [];
+        for (const stmt of statements) {
+          results.push(await stmt.all());
+        }
+        db.exec("COMMIT");
+        return results;
+      } catch (error) {
+        db.exec("ROLLBACK");
+        throw error;
       }
-      return results;
     },
   };
 }

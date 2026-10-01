@@ -22,7 +22,9 @@ npx wrangler d1 execute minideck --remote --file migrations/0002_published_head.
 
 此 migration 會把 `current_version > 0` 的既有專案承接為 `published_version`（`publish_origin = 'migration'`），既有分享連結不中斷；`current_version = 0` 的專案維持未發佈。
 
-本機測試（`npm test`）需要 Node.js ≥ 24：測試以 `node:sqlite` 模擬 D1，Node 22 的 `node:sqlite` 不支援位置參數繫結到 `?N` 形式欄位，會拋 `column index out of range`。建議用 `.nvmrc` 指定版本。
+本機測試（`npm test`）需要 Node.js ≥ 24：測試以 `node:sqlite` 模擬 D1，Node 22 的 `node:sqlite` 不支援位置參數繫結到 `?N` 形式欄位，會拋 `column index out of range`。`.nvmrc` 與 `package.json` 的 `engines` 同時鎖定此下限，CI 亦以 `node-version-file: .nvmrc` 對齊。
+
+`npm test` 只跑無需網路與 Worker 的測試（`test/security.mjs`、`token-client.mjs`、`storage-cleanup.mjs`、`frontend.mjs`、`judge-mock.mjs`、`persona-historical-scope.mjs`、`publish-lifecycle.mjs`）。`test/integration.mjs` 與 `test/smoke-e2e.mjs` 需要 `npm run dev`（wrangler dev）與真實 D1／R2，屬人工驗證用途，不在 CI 測試鏈中。
 
 下列範例以 Git Bash／WSL 的 `curl` 語法表示：
 
@@ -173,8 +175,8 @@ curl -sS "$BASE/api/projects/$PROJECT_ID/deck?version=1" \
 ### 2. 公開分享播放器語意
 
 - **發佈版本公開**：訪客瀏覽 `/p/:id` 時，播放器只呈現 `published_version`。`generate`／`revise`／`deck save`／`rollback` 只推進草稿 head（`current_version`），不會改變公開內容；唯有 `POST /api/projects/:id/publish` 才切換公開 head。播放頁不包含、亦不洩露 `X-Project-Token`。
-- **草稿與歷史版本隔離**：訪客在播放頁附帶 `?version=N` 讀取非發佈版本，或專案尚未發佈時，未授權者一律回傳 `403`／`404`，防止草稿外洩。
-- **Owner 預覽**：帶 `X-Project-Token` 的 `/p/:id?version=N` 重用同一條公開 render path 預覽任一版本，預覽不產生新的公開網址。
+- **草稿與歷史版本隔離**：訪客在播放頁附帶 `?version=N` 讀取非發佈版本時回傳 `403`；專案不存在、未發佈或公開 head 已失效時回傳 `404`，且所有匿名 `404` 內容完全相同（`{"error":"找不到可播放的簡報"}`），無法藉回應差異反推專案或草稿是否存在。
+- **Owner 預覽**：帶 `X-Project-Token` 的 `/p/:id?version=N` 重用同一條公開 render path 預覽任一版本，預覽不產生新的公開網址。未發佈專案的分享連結對 owner 也回 `404`（該連結確實沒有公開內容），preview 請走 `?version=N`。
 - **回退語意（Rollback）**：將既有歷史版本複製為新的草稿版（例如 v1 回退產生 v3），公開連結不受影響；要公開回退版需再次 `publish`。
 - **撤回與刪除（Revocation & Deletion）**：`unpublish` 只下線公開存取；`DELETE /api/projects/:id` 刪除專案後，公開播放頁與所有版本 API 立即失效（回傳 `404`），R2 物件同步清除。
 

@@ -121,6 +121,29 @@ try {
   assert.equal(dangling.published_version, null);
   console.log("PASS legacy migration：既有公開專案承接 current_version，缺版本列者不產生懸空 head");
 
+  // 0b. Harness fidelity: the D1 fake's batch must behave like a D1
+  //     transaction, otherwise the "no partial state" assertions below could
+  //     never fail. Prove a mid-batch throw rolls the batch back.
+  const batchProbe = createEnv().DB;
+  const insertDup = (sql) => batchProbe.prepare(sql).bind();
+  await assert.rejects(
+    batchProbe.batch([
+      insertDup(
+        "INSERT INTO projects(id, created_at, brief, current_version) VALUES('dup', 0, 'b', 1)",
+      ),
+      insertDup(
+        "INSERT INTO projects(id, created_at, brief, current_version) VALUES('dup', 0, 'b', 1)",
+      ),
+    ]),
+    /UNIQUE constraint failed/,
+  );
+  assert.equal(
+    (await batchProbe.prepare("SELECT id FROM projects WHERE id = 'dup'").all())
+      .results.length,
+    0,
+  );
+  console.log("PASS D1 batch 具交易語意：中途失敗不留半套寫入");
+
   // 1. Create project + save v1; anonymous /p/:id must NOT serve the draft.
   const createRes = await worker.fetch(
     new Request("https://minideck.test/api/projects", {
@@ -375,6 +398,26 @@ try {
   assert.ok(sentinelHtml.includes("$&amp;PRICE_$'_$9_TAIL"));
   assert.ok(!sentinelHtml.includes("__MINIDECK_DECK_HTML__"));
   console.log("PASS 播放器原樣呈現含 $ 取代樣式的 deck 內容");
+
+  // 17. A shared link holder must not be able to tell "no such project" from
+  //     "not published" from "published head dangles" by status code or body.
+  mockEnv.DB.exec(`DELETE FROM versions WHERE project_id = '${idB}' AND version = 3`);
+
+  const missingRes = await player("0".repeat(40));
+  assert.equal(missingRes.status, 404);
+  const missingBody = await missingRes.text();
+
+  const danglingRes = await player(idB);
+  assert.equal(danglingRes.status, 404);
+  const danglingBody = await danglingRes.text();
+
+  const deletedRes = await player(id);
+  assert.equal(deletedRes.status, 404);
+  const deletedBody = await deletedRes.text();
+
+  assert.equal(danglingBody, missingBody);
+  assert.equal(deletedBody, missingBody);
+  console.log("PASS 匿名 404 回應無法區分不存在／未發佈／懸空公開 head");
 
   console.log("ALL PUBLISH LIFECYCLE ACCEPTANCE CRITERIA PASSED");
 } finally {

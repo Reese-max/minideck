@@ -676,6 +676,13 @@ async function getImageResponse(env, hash) {
   return new Response(object.body, { headers });
 }
 
+// Every anonymous miss on the public player answers with one identical body so
+// a shared link holder cannot tell an unpublished project, a dangling head and a
+// missing project apart by status code or error text.
+function playerNotFound() {
+  return json({ error: "找不到可播放的簡報" }, 404);
+}
+
 async function getPlayerResponse(request, env, id) {
   if (!id || !/^[a-zA-Z0-9_-]{1,64}$/.test(id)) {
     return json({ error: "專案識別碼無效" }, 400);
@@ -691,7 +698,7 @@ async function getPlayerResponse(request, env, id) {
   }
 
   const project = await getProject(env.DB, id);
-  if (!project) return json({ error: "專案不存在" }, 404);
+  if (!project) return playerNotFound();
 
   // The public player only ever serves published_version. Any other version
   // is a draft preview reserved for the owner behind X-Project-Token.
@@ -703,19 +710,16 @@ async function getPlayerResponse(request, env, id) {
     if (!(await verifyProjectToken(token, project.access_token_hash))) {
       // An unpublished project answers every anonymous path with 404 so the
       // existence of drafts cannot be probed through status codes.
-      if (publishedVersion < 1) {
-        return json({ error: "簡報尚未發佈" }, 404);
-      }
+      if (publishedVersion < 1) return playerNotFound();
       return json({ error: "版本未公開發佈，需專案權杖" }, 403);
     }
   }
-  if (!Number.isInteger(version) || version < 1) {
-    return json({ error: "簡報尚未發佈" }, 404);
-  }
+  if (!Number.isInteger(version) || version < 1) return playerNotFound();
 
   const result = await readDeck(env.DB, env.BUCKET, id, version);
-  if (!result.project) return json({ error: "專案不存在" }, 404);
-  if (!result.deck) return json({ error: "找不到簡報版本" }, 404);
+  // A concurrent DELETE can still retire the project between the two reads.
+  if (!result.project) return playerNotFound();
+  if (!result.deck) return playerNotFound();
 
   const templateResponse = await env.ASSETS.fetch(
     new URL("/play.html", request.url),
