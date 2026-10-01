@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { readFile } from "node:fs/promises";
 import { test } from "node:test";
-import { ownerIdFromGithubProfile } from "../src/owner-id.mjs";
+import {
+  isImmutableOwnerId,
+  ownerIdFromGithubProfile,
+} from "../src/owner-id.mjs";
 import { runIdempotent } from "../src/idempotency.mjs";
 
 const root = new URL("../", import.meta.url);
@@ -75,9 +78,18 @@ test("uses the immutable GitHub subject for the owner namespace", async () => {
   assert.equal(ownerIdFromGithubProfile({ id: 12345, login: "renamed-user" }), "github:12345");
   assert.equal(ownerIdFromGithubProfile({ id: 0, login: "invalid" }), null);
   assert.equal(ownerIdFromGithubProfile({ id: "12345", login: "invalid" }), null);
+  assert.equal(isImmutableOwnerId("github:12345"), true);
+  assert.equal(isImmutableOwnerId("renamed-user"), false);
   const source = await read("src/auth.ts");
   assert.match(source, /ownerIdFromGithubProfile/);
+  assert.match(source, /isImmutableOwnerId/);
   assert.doesNotMatch(source, /userBody\.login/);
+});
+
+test("rejects legacy login-based OAuth rows before they become MCP principals", async () => {
+  const source = await read("src/auth.ts");
+  assert.match(source, /!isImmutableOwnerId\(row\.owner_login\)/);
+  assert.match(source, /!isImmutableOwnerId\(codeRow\.owner_login\)/);
 });
 
 class IdempotencyD1 {

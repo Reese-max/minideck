@@ -5,3 +5,7 @@ export function ownerIdFromGithubProfile(profile) {
     ? "github:" + id
     : null;
 }
+
+export function isImmutableOwnerId(ownerId) {
+  return typeof ownerId === "string" && /^github:[1-9]\d*$/.test(ownerId);
+}

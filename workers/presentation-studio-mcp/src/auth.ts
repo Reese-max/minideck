@@ -5,7 +5,10 @@ import {
   sha256Hex,
   verifyPkce,
 } from "./crypto";
-import { ownerIdFromGithubProfile } from "./owner-id.mjs";
+import {
+  isImmutableOwnerId,
+  ownerIdFromGithubProfile,
+} from "./owner-id.mjs";
 import type { AuthPrincipal, Env } from "./types";
 
 const ACCESS_TOKEN_TTL_MS = 60 * 60 * 1000;
@@ -371,6 +374,7 @@ async function handleToken(request: Request, env: Env): Promise<Response> {
     }>();
   if (
     !codeRow ||
+    !isImmutableOwnerId(codeRow.owner_login) ||
     codeRow.used_at ||
     codeRow.client_id !== clientId ||
     codeRow.redirect_uri !== redirectUri ||
@@ -411,6 +415,7 @@ async function handleRefreshToken(
     }>();
   if (
     !row ||
+    !isImmutableOwnerId(row.owner_login) ||
     row.revoked_at ||
     !row.refresh_expires_at ||
     new Date(row.refresh_expires_at).getTime() <= Date.now()
@@ -489,6 +494,7 @@ export async function authenticateMcpRequest(
     }>();
   if (
     !row ||
+    !isImmutableOwnerId(row.owner_login) ||
     row.revoked_at ||
     new Date(row.access_expires_at).getTime() <= Date.now()
   ) {
