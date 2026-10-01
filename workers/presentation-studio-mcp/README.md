@@ -19,6 +19,9 @@ The /mcp endpoint exposes exactly eight high-level tools:
 - delete_presentation
 
 All project reads and writes are scoped to the authenticated OAuth owner.
+Idempotency records are namespaced by the same owner, so a cached result can
+only be replayed to the owner that created it and write tools re-authorize
+the owner before serving any cached response.
 create_presentation accepts a ChatGPT-first slideSpec, inline text or base64
 source content, and claim-to-source mappings. The Worker stores source objects
 under a generated project prefix and only stores the corresponding metadata in
