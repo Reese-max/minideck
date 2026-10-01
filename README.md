@@ -53,7 +53,7 @@ PROJECT_ID=<回應中的-id>
 PROJECT_TOKEN=<回應中的-token>
 ```
 
-`token` 只在建立專案時回傳；專案狀態與寫入操作都要以 `X-Project-Token` header 傳送。`/api/projects/:id/deck`、`/img/<hash8>.jpg` 與 `/p/:id` 是公開讀取資源。
+`token` 只在建立專案時回傳；專案狀態、讀取原始簡報版本（`/api/projects/:id/deck`）與寫入操作皆必須以 `X-Project-Token` header 傳送。公開讀取資源僅限於 `/p/:id`（分享播放器）與 `/img/<hash8>.jpg`。
 
 ### 3. 生成簡報
 
@@ -112,14 +112,39 @@ curl -sS -o play.html -w '%{http_code}\n' "$BASE/p/$PROJECT_ID"
 
 播放頁支援滑鼠點擊、方向鍵、`PageUp`／`PageDown`、`Home`／`End`，以及 `F` 全螢幕。
 
-## 增補版本操作
+## 版本存取與安全隔離語意
 
-讀最新版或指定版本 HTML：
+### 1. 讀取簡報版本（需權杖）
+
+原始簡報 HTML 包含製作過程中的草稿與潛在敏感資料，僅限擁有者存取，必須附帶 `X-Project-Token`：
 
 ```bash
-curl -sS "$BASE/api/projects/$PROJECT_ID/deck" -o latest.html
-curl -sS "$BASE/api/projects/$PROJECT_ID/deck?version=1" -o v1.html
+# 讀取最新版
+curl -sS "$BASE/api/projects/$PROJECT_ID/deck" \
+  -H "X-Project-Token: $PROJECT_TOKEN" \
+  -o latest.html
+
+# 讀取指定歷史版本（如 v1）
+curl -sS "$BASE/api/projects/$PROJECT_ID/deck?version=1" \
+  -H "X-Project-Token: $PROJECT_TOKEN" \
+  -o v1.html
 ```
+
+若未附帶權杖或權杖無效，API 一律回傳 `403 Forbidden`（`{"error":"專案權杖無效"}`）。
+
+### 2. 公開分享播放器語意
+
+- **最新版本公開**：訪客瀏覽 `/p/:id` 時，播放器直接呈現當前最新版本（`current_version`）。播放頁不包含、亦不洩露 `X-Project-Token`。
+- **歷史版本隔離**：訪客若嘗試在播放頁附帶 `?version=N` 讀取非當前版本，系統將檢查專案權杖；未授權者一律回傳 `403 Forbidden`，防止過往被刪改或撤回的草稿外洩。
+- **回退語意（Rollback）**：將既有歷史版本複製為新的最新版（例如 v1 回退產生 v3）。回退後，公開分享連結 `/p/:id` 即呈現 v3，而被取代的中間草稿版本（例如 v2）依然受到嚴格保護，不會對外公開。
+- **撤回與刪除（Revocation & Deletion）**：使用 `DELETE /api/projects/:id` 刪除專案後，公開播放頁與所有版本 API 立即失效（回傳 `404`），R2 物件同步清除。
+
+### 3. 既有連結遷移與相容性決策
+
+- **公開分享連結**：現有 `/p/:id` 連結行為維持相容，持續公開播放最新版本，外部受眾無需更新網址。
+- **直接 API 呼叫**：先前未受保護的 `GET /api/projects/:id/deck` 現在一律強制驗證 `X-Project-Token`。任何以腳本或 API 自動抓取簡報 HTML 的使用者，請於請求標頭中加入 `X-Project-Token`。
+
+### 4. 回退版本
 
 將既有版本複製為新的最新版（不呼叫 MiniMax、不扣額度）：
 
@@ -131,6 +156,8 @@ curl -sS "$BASE/api/projects/$PROJECT_ID/rollback" \
 ```
 
 `POST /api/projects/:id/image` 回傳的 `/img/<hash8>.jpg` 可直接以 `GET` 下載，回應帶一年 immutable cache。
+
+### 5. 刪除專案
 
 刪除專案時需傳送 `X-Project-Token`；若 R2 deck 物件清理失敗，回應會是 503 且 `deleted:false`，D1 metadata 會保留以便重試。共用的 `images/<hash8>.jpg` 圖片快取不會隨單一專案刪除。
 
