@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { readFileSync } from "node:fs";
+import { assertD1Initialized } from "../src/store.js";
 import worker from "../src/worker.js";
-import { createEnv, stubTurnstile } from "./harness.mjs";
+import { createD1, createEnv, stubTurnstile } from "./harness.mjs";
 
 const mockEnv = createEnv();
 const restoreFetch = stubTurnstile();
@@ -143,6 +144,24 @@ try {
     0,
   );
   console.log("PASS D1 batch 具交易語意：中途失敗不留半套寫入");
+
+  // 0c. Overlapping reads on one fake DB must not collide the way a shared
+  //     sqlite connection would; real D1 answers each batch independently.
+  const overlap = createEnv().DB;
+  const overlapState = async () =>
+    overlap.batch([
+      overlap.prepare("SELECT count(*) AS n FROM projects").bind(),
+      overlap.prepare("SELECT count(*) AS n FROM versions").bind(),
+    ]);
+  const [overlapA, overlapB] = await Promise.all([overlapState(), overlapState()]);
+  assert.equal(overlapA[0].results[0].n, overlapB[0].results[0].n);
+  console.log("PASS D1 模擬層序列化重疊請求，不會互相回捲");
+
+  // 0d. Reading a project before migrations/0002 runs would 500 on every
+  //     project path; the public quota endpoint must name the missing migration.
+  await assert.rejects(assertD1Initialized(createD1("../test/fixtures/legacy-projects.sql")), /0002_published_head\.sql/);
+  await assertD1Initialized(createEnv().DB);
+  console.log("PASS 舊 schema 在公開端點被辨識為缺少 0002 migration");
 
   // 1. Create project + save v1; anonymous /p/:id must NOT serve the draft.
   const createRes = await worker.fetch(
@@ -326,9 +345,13 @@ try {
   ]);
   assert.equal(save4.status, 200);
   assert.equal(pubRace.status, 200);
+  const raceReceipt = await pubRace.json();
   const state3 = await projectState(id, token);
   assert.equal(state3.current_version, 4);
-  assert.equal(state3.published_version, 3);
+  // A publish receipt that reports success must survive the concurrent save:
+  // a test double that rolls back the save's batch must not also discard the
+  // publish write.
+  assert.equal(state3.published_version, raceReceipt.version);
   const anonRace = await player(id);
   assert.equal(anonRace.status, 200);
   assert.match(await anonRace.text(), /VERSION_ONE_PUBLIC/);
@@ -399,7 +422,26 @@ try {
   assert.ok(!sentinelHtml.includes("__MINIDECK_DECK_HTML__"));
   console.log("PASS 播放器原樣呈現含 $ 取代樣式的 deck 內容");
 
-  // 17. A shared link holder must not be able to tell "no such project" from
+  // 17. A version whose R2 blob is gone must not become the public head, and an
+  //     anonymous `?version=` probe must not learn that a head ever existed.
+  await mockEnv.BUCKET.delete(`decks/${idB}/3.html`);
+  const publishGhostBlob = await publish(idB, tokenB, 3);
+  assert.equal(publishGhostBlob.status, 404);
+  const stateGhost = await projectState(idB, tokenB);
+  assert.equal(stateGhost.published_version, 3);
+
+  const anonGhostHead = await player(idB);
+  assert.equal(anonGhostHead.status, 404);
+  const anonGhostProbe = await player(idB, { version: 1 });
+  assert.equal(anonGhostProbe.status, 404);
+  const anonGhostBody = await anonGhostProbe.text();
+  const anonGhostHeadBody = await anonGhostHead.text();
+  assert.equal(anonGhostBody, anonGhostHeadBody);
+  const ownerGhost = await player(idB, { version: 1, token: tokenB });
+  assert.equal(ownerGhost.status, 200);
+  console.log("PASS 公開 head 的 R2 物件遺失時 publish 拒絕且匿名探測仍為 404");
+
+  // 18. A shared link holder must not be able to tell "no such project" from
   //     "not published" from "published head dangles" by status code or body.
   mockEnv.DB.exec(`DELETE FROM versions WHERE project_id = '${idB}' AND version = 3`);
 
@@ -418,7 +460,6 @@ try {
   assert.equal(danglingBody, missingBody);
   assert.equal(deletedBody, missingBody);
   console.log("PASS 匿名 404 回應無法區分不存在／未發佈／懸空公開 head");
-
   console.log("ALL PUBLISH LIFECYCLE ACCEPTANCE CRITERIA PASSED");
 } finally {
   restoreFetch();

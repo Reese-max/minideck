@@ -12,11 +12,24 @@ export function createD1(schemaFile = "../schema.sql") {
     if (trimmed) db.exec(trimmed);
   }
 
+  // node:sqlite is a single connection, while D1 runs each statement on the
+  // server side. Queue every statement so a batch's transaction can never
+  // interleave with another request's write and roll it back by accident.
+  let queue = Promise.resolve();
+  const locked = (work) => {
+    const result = queue.then(work, work);
+    queue = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  };
+
   return {
     // Raw escape hatch for fixtures that need to seed or damage rows the
     // product API never exposes.
     exec(sql) {
-      return db.exec(sql);
+      return locked(() => db.exec(sql));
     },
     prepare(sql) {
       let bound = [];
@@ -25,37 +38,45 @@ export function createD1(schemaFile = "../schema.sql") {
           bound = args;
           return this;
         },
-        async first() {
-          const stmt = db.prepare(sql);
-          return stmt.get(...bound) ?? null;
+        first() {
+          const args = bound;
+          return locked(() => db.prepare(sql).get(...args) ?? null);
         },
-        async all() {
-          const stmt = db.prepare(sql);
-          return { results: stmt.all(...bound) };
+        all() {
+          const args = bound;
+          return locked(() => ({ results: db.prepare(sql).all(...args) }));
         },
-        async run() {
-          const stmt = db.prepare(sql);
-          const info = stmt.run(...bound);
-          return { meta: { changes: Number(info.changes) } };
+        run() {
+          const args = bound;
+          return locked(() => {
+            const info = db.prepare(sql).run(...args);
+            return { meta: { changes: Number(info.changes) } };
+          });
+        },
+        // Unlocked execution, used by batch() while it already owns the queue.
+        __all() {
+          return { results: db.prepare(sql).all(...bound) };
         },
       };
     },
-    async batch(statements) {
+    batch(statements) {
       // D1 runs a batch inside a single transaction: a statement that throws
       // leaves none of the batch's writes behind. Model that here, otherwise
       // "no partial state" assertions are vacuously true.
-      db.exec("BEGIN");
-      try {
-        const results = [];
-        for (const stmt of statements) {
-          results.push(await stmt.all());
+      return locked(async () => {
+        db.exec("BEGIN");
+        try {
+          const results = [];
+          for (const stmt of statements) {
+            results.push(await stmt.__all());
+          }
+          db.exec("COMMIT");
+          return results;
+        } catch (error) {
+          db.exec("ROLLBACK");
+          throw error;
         }
-        db.exec("COMMIT");
-        return results;
-      } catch (error) {
-        db.exec("ROLLBACK");
-        throw error;
-      }
+      });
     },
   };
 }

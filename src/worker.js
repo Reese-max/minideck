@@ -603,7 +603,7 @@ async function publishDeck(request, env, id) {
     return json({ error: "版本編號無效" }, 400);
   }
 
-  const published = await publishDeckVersion(env.DB, id, body.version);
+  const published = await publishDeckVersion(env.DB, env.BUCKET, id, body.version);
   if (!published) return json({ error: "找不到簡報版本" }, 404);
   return json({
     published: true,
@@ -709,8 +709,12 @@ async function getPlayerResponse(request, env, id) {
     const token = request.headers.get("X-Project-Token")?.trim();
     if (!(await verifyProjectToken(token, project.access_token_hash))) {
       // An unpublished project answers every anonymous path with 404 so the
-      // existence of drafts cannot be probed through status codes.
+      // existence of drafts cannot be probed through status codes. A head that
+      // no longer renders is treated the same way, so a 403 can never confirm
+      // that a project exists and once had a public head.
       if (publishedVersion < 1) return playerNotFound();
+      const head = await readDeck(env.DB, env.BUCKET, id, publishedVersion);
+      if (!head.project || !head.deck) return playerNotFound();
       return json({ error: "版本未公開發佈，需專案權杖" }, 403);
     }
   }

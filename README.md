@@ -20,7 +20,7 @@ npx wrangler d1 execute minideck --remote --file migrations/0001_project_access_
 npx wrangler d1 execute minideck --remote --file migrations/0002_published_head.sql
 ```
 
-此 migration 會把 `current_version > 0` 的既有專案承接為 `published_version`（`publish_origin = 'migration'`），既有分享連結不中斷；`current_version = 0` 的專案維持未發佈。
+此 migration 會把 `current_version > 0` 的既有專案承接為 `published_version`（`publish_origin = 'migration'`），既有分享連結不中斷；`current_version = 0` 的專案維持未發佈。`0002` 未執行前，`GET /api/quota` 會直接回報缺少此 migration（`D1 schema 尚未初始化：請先套用 migrations/0002_published_head.sql`），請在部署前完成；本機 `npm run dev` 需對本機 D1 執行同一份檔案。
 
 本機測試（`npm test`）需要 Node.js ≥ 24：測試以 `node:sqlite` 模擬 D1，Node 22 的 `node:sqlite` 不支援位置參數繫結到 `?N` 形式欄位，會拋 `column index out of range`。`.nvmrc` 與 `package.json` 的 `engines` 同時鎖定此下限，CI 亦以 `node-version-file: .nvmrc` 對齊。
 
@@ -118,7 +118,7 @@ curl -sS "$BASE/api/projects/$PROJECT_ID" \
   -H "X-Project-Token: $PROJECT_TOKEN"
 ```
 
-### 8. 發佈公開版本
+### 9. 發佈公開版本
 
 把同專案中已存在的版本切換為公開 head；不呼叫 MiniMax、不扣額度。回應帶發佈 receipt：
 
@@ -131,9 +131,9 @@ curl -sS "$BASE/api/projects/$PROJECT_ID/publish" \
 # → {"published":true,"version":2,"published_at":1759190400000}
 ```
 
-版本不存在回 `404`；權杖無效回 `403`。
+版本不存在、或該版本的 R2 物件已不存在時回 `404`（公開 head 不會指向打不開的簡報，publish 也不會為此簽發 receipt）；權杖無效回 `403`。
 
-### 9. 下線公開分享
+### 10. 下線公開分享
 
 ```bash
 curl -sS "$BASE/api/projects/$PROJECT_ID/unpublish" \
@@ -144,7 +144,7 @@ curl -sS "$BASE/api/projects/$PROJECT_ID/unpublish" \
 
 下線後 `/p/:id` 回 `404`，但專案、草稿與歷史版本全部保留。
 
-### 10. 取得匿名播放頁
+### 11. 取得匿名播放頁
 
 ```bash
 curl -sS -o play.html -w '%{http_code}\n' "$BASE/p/$PROJECT_ID"

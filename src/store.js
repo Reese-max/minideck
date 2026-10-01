@@ -1,4 +1,13 @@
 const REQUIRED_TABLES = ["projects", "versions", "messages", "quotas"];
+// Columns added by migrations/0002_published_head.sql. Reading a project before
+// that migration runs raises on every project path, so a public endpoint fails
+// loudly here instead of 500-ing later with an opaque SQL error.
+const REQUIRED_PROJECT_COLUMNS = [
+  "current_version",
+  "published_version",
+  "published_at",
+  "publish_origin",
+];
 
 export async function assertD1Initialized(db) {
   if (!db || typeof db.prepare !== "function") {
@@ -16,6 +25,14 @@ export async function assertD1Initialized(db) {
 
   if (REQUIRED_TABLES.some((table) => !present.has(table))) {
     throw new Error("D1 schema 尚未初始化");
+  }
+
+  const columns = await db.prepare("PRAGMA table_info(projects)").all();
+  const projectColumns = new Set(columns.results.map((row) => row.name));
+  if (REQUIRED_PROJECT_COLUMNS.some((column) => !projectColumns.has(column))) {
+    throw new Error(
+      "D1 schema 尚未初始化：請先套用 migrations/0002_published_head.sql",
+    );
   }
 }
 
@@ -160,8 +177,19 @@ export async function rollbackDeckVersion(db, bucket, id, sourceVersion) {
 
 // Single-statement conditional update: the EXISTS guard keeps the public head
 // from ever pointing at a version that does not exist in the same project,
-// even if a concurrent save/delete is in flight.
-export async function publishDeckVersion(db, id, version) {
+// even if a concurrent save/delete is in flight. The R2 head check rejects a
+// version whose blob is already gone, so publish can never mint a receipt for
+// a public link that 404s forever.
+export async function publishDeckVersion(db, bucket, id, version) {
+  const row = await db
+    .prepare(
+      "SELECT r2_key FROM versions WHERE project_id = ?1 AND version = ?2",
+    )
+    .bind(id, version)
+    .first();
+  if (!row) return null;
+  if (!(await bucket.head(row.r2_key))) return null;
+
   const publishedAt = Date.now();
   const result = await db
     .prepare(
