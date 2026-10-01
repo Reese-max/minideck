@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { normalizeIntentionalDecorationOverflow } from "./deck-normalizer.mjs";
 import { claimIntegrityCheck, claimTextMap, runWithClaimIntegrityGate } from "./claim-integrity.mjs";
+import { planVisualCoverage } from "./visual-coverage.mjs";
 
 const MAX_INPUT_BYTES = 40 * 1024 * 1024;
 const MAX_COMMAND_OUTPUT = 4 * 1024 * 1024;
@@ -331,7 +332,7 @@ function commandPass(command) {
   return Boolean(command && command.exitCode === 0);
 }
 
-function makeAudit(renderResult, input, exportPass = undefined) {
+function makeAudit(renderResult, input, exportPass = undefined, visualCoverage = undefined) {
   const commands = { ...renderResult.commands, claimIntegrity: claimIntegrityCheck(input) };
   const deterministic = {
     goalSpec: commandPass(commands.goalSpec),
@@ -364,6 +365,20 @@ function makeAudit(renderResult, input, exportPass = undefined) {
     deterministic,
     visualJudge: { status: "not_configured", issues: ["visual_judge_not_configured"] },
     factualJudge: { status: "not_configured", issues: ["factual_judge_not_configured"] },
+    visualCoverage: visualCoverage
+      ? {
+          complete: visualCoverage.complete,
+          slideCount: visualCoverage.slideCount,
+          screenshotCount: visualCoverage.screenshotCount,
+          sheetCount: visualCoverage.sheetCount,
+          expectedSlideIds: visualCoverage.expectedSlideIds,
+          evaluatedSlideIds: visualCoverage.evaluatedSlideIds,
+          sheets: (visualCoverage.sheets || []).map((sheet) => ({
+            kind: sheet.kind,
+            slideIds: sheet.slideIds,
+          })),
+        }
+      : undefined,
     evidence,
     blockedReason: technicalPass ? "JUDGES_NOT_CONFIGURED" : "DASHI_TECHNICAL_CHECK_FAILED",
   };
@@ -380,52 +395,71 @@ async function upload(input, kind, bytes, contentType) {
   return JSON.parse(text);
 }
 
-async function createPreview(workDir) {
-  const screenshotsDir = join(workDir, "screenshots");
-  let names;
+async function planJobVisualCoverage(workDir) {
+  let slideIds = [];
   try {
-    names = (await readdir(screenshotsDir))
-      .filter((name) => name.endsWith(".png"))
-      .sort()
-      .slice(0, 20);
+    const goal = await readJson(join(workDir, "goal.json"));
+    slideIds = (Array.isArray(goal?.slides) ? goal.slides : []).map((slide) =>
+      isObject(slide) ? slide.id : undefined,
+    );
   } catch {
-    return null;
+    slideIds = [];
   }
-  if (names.length === 0) return null;
+  let names = [];
   try {
-    const requireFromDashi = createRequire(join(DashiProject, "package.json"));
-    const { PNG } = requireFromDashi("pngjs");
-    const tileWidth = 480;
-    const tileHeight = 270;
-    const columns = Math.min(2, names.length);
-    const rows = Math.ceil(names.length / columns);
-    const sheet = new PNG({ width: columns * tileWidth, height: rows * tileHeight });
-    for (let index = 0; index < names.length; index += 1) {
-      const image = PNG.sync.read(await readFile(join(screenshotsDir, names[index])));
-      const column = index % columns;
-      const row = Math.floor(index / columns);
-      for (let y = 0; y < tileHeight; y += 1) {
-        const sourceY = Math.min(image.height - 1, Math.floor((y * image.height) / tileHeight));
-        for (let x = 0; x < tileWidth; x += 1) {
-          const sourceX = Math.min(image.width - 1, Math.floor((x * image.width) / tileWidth));
-          const sourceOffset = (sourceY * image.width + sourceX) * 4;
-          const targetOffset = ((row * tileHeight + y) * sheet.width + column * tileWidth + x) * 4;
-          sheet.data[targetOffset] = image.data[sourceOffset];
-          sheet.data[targetOffset + 1] = image.data[sourceOffset + 1];
-          sheet.data[targetOffset + 2] = image.data[sourceOffset + 2];
-          sheet.data[targetOffset + 3] = image.data[sourceOffset + 3];
-        }
-      }
-    }
-    const previewPath = join(workDir, "preview.png");
-    await writeFile(previewPath, PNG.sync.write(sheet));
-    return previewPath;
+    names = await readdir(join(workDir, "screenshots"));
   } catch {
-    return null;
+    names = [];
   }
+  return planVisualCoverage(slideIds, names);
 }
 
-async function collectArtifacts(input, renderResult, audit, includeExports = {}) {
+async function writeContactSheet(screenshotsDir, fileNames, previewPath) {
+  const requireFromDashi = createRequire(join(DashiProject, "package.json"));
+  const { PNG } = requireFromDashi("pngjs");
+  const tileWidth = 480;
+  const tileHeight = 270;
+  const columns = Math.min(2, fileNames.length);
+  const rows = Math.ceil(fileNames.length / columns);
+  const sheet = new PNG({ width: columns * tileWidth, height: rows * tileHeight });
+  for (let index = 0; index < fileNames.length; index += 1) {
+    const image = PNG.sync.read(await readFile(join(screenshotsDir, fileNames[index])));
+    const column = index % columns;
+    const row = Math.floor(index / columns);
+    for (let y = 0; y < tileHeight; y += 1) {
+      const sourceY = Math.min(image.height - 1, Math.floor((y * image.height) / tileHeight));
+      for (let x = 0; x < tileWidth; x += 1) {
+        const sourceX = Math.min(image.width - 1, Math.floor((x * image.width) / tileWidth));
+        const sourceOffset = (sourceY * image.width + sourceX) * 4;
+        const targetOffset = ((row * tileHeight + y) * sheet.width + column * tileWidth + x) * 4;
+        sheet.data[targetOffset] = image.data[sourceOffset];
+        sheet.data[targetOffset + 1] = image.data[sourceOffset + 1];
+        sheet.data[targetOffset + 2] = image.data[sourceOffset + 2];
+        sheet.data[targetOffset + 3] = image.data[sourceOffset + 3];
+      }
+    }
+  }
+  await writeFile(previewPath, PNG.sync.write(sheet));
+}
+
+async function createPreviews(workDir, coveragePlan) {
+  const screenshotsDir = join(workDir, "screenshots");
+  const previews = [];
+  for (const sheet of coveragePlan.sheets) {
+    if (!sheet.kind || sheet.fileNames.length === 0) continue;
+    const previewPath = join(workDir, `${sheet.kind}.png`);
+    try {
+      await writeContactSheet(screenshotsDir, sheet.fileNames, previewPath);
+      previews.push({ kind: sheet.kind, path: previewPath });
+    } catch {
+      // A sheet that cannot be composed is left out of the artifact list; the
+      // Judges coverage gate fails closed on the missing kind.
+    }
+  }
+  return previews;
+}
+
+async function collectArtifacts(input, renderResult, audit, includeExports = {}, coveragePlan = undefined) {
   const artifacts = [];
   const workDir = join(renderResult.deckDir, "..");
   const goal = await readFile(join(workDir, "goal.json"));
@@ -436,9 +470,11 @@ async function collectArtifacts(input, renderResult, audit, includeExports = {})
   artifacts.push(await upload(input, "html", html, "text/html"));
   artifacts.push(await upload(input, "quality", quality, "application/json"));
   artifacts.push(await upload(input, "audit", auditBytes, "application/json"));
-  const previewPath = await createPreview(workDir);
-  if (previewPath) {
-    artifacts.push(await upload(input, "preview", await readFile(previewPath), "image/png"));
+  const previews = coveragePlan
+    ? await createPreviews(workDir, coveragePlan)
+    : [];
+  for (const preview of previews) {
+    artifacts.push(await upload(input, preview.kind, await readFile(preview.path), "image/png"));
   }
   if (includeExports.pptx) {
     artifacts.push(await upload(input, "pptx", await readFile(includeExports.pptx), "application/vnd.openxmlformats-officedocument.presentationml.presentation"));
@@ -490,8 +526,9 @@ async function execute(input) {
       }
       if (requested.has("html")) exportPass = exportPass ?? true;
     }
-    const audit = makeAudit(renderResult, input, exportPass);
-    const artifacts = await collectArtifacts(input, renderResult, audit, exportPaths);
+    const coveragePlan = await planJobVisualCoverage(workDir);
+    const audit = makeAudit(renderResult, input, exportPass, coveragePlan);
+    const artifacts = await collectArtifacts(input, renderResult, audit, exportPaths, coveragePlan);
     const finalGoal = await readJson(goal.goalPath);
     const rendererReport = {
       renderer: "dashi",

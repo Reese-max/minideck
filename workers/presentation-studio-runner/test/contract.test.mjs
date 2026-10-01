@@ -144,3 +144,19 @@ test("wires integrity preflight before render, revision planning, and Judges", a
   assert.match(workflow, /runJudgeIfIntegrityPasses/);
   assert.match(judges, /shouldRunJudges\(result\)/);
 });
+
+test("visual judge must cover every slide before approval can pass", async () => {
+  const execution = await read("runner/execute-job.mjs");
+  const judges = await read("src/judges.ts");
+  const storage = await read("src/storage.ts");
+  const coverage = await read("runner/visual-coverage.mjs");
+  assert.doesNotMatch(execution, /\.slice\(0,\s*20\)/);
+  assert.match(execution, /planVisualCoverage/);
+  assert.match(judges, /VISUAL_COVERAGE_INCOMPLETE/);
+  assert.match(judges, /VISUAL_PREVIEW_SHEETS_MISSING/);
+  assert.match(judges, /aggregateVisualReports/);
+  assert.match(judges, /visualCoverageSatisfied/);
+  assert.match(storage, /preview-\[2-5\]/);
+  assert.match(coverage, /PREVIEW_TILES_PER_SHEET\s*=\s*20/);
+  assert.match(coverage, /MAX_PREVIEW_SHEETS/);
+});

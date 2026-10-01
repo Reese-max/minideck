@@ -67,3 +67,12 @@ test("does not approve a version before both independent judges complete", async
   assert.match(source, /audit\.visualJudgePass !== true/);
   assert.match(source, /audit\.factualJudgePass !== true/);
 });
+
+test("approval fails closed when the visual coverage receipt misses slides", async () => {
+  const source = await read("src/presentation.ts");
+  const coverage = await read("src/visual-coverage.mjs");
+  assert.match(source, /visual_coverage_incomplete/);
+  assert.match(source, /visualCoverageSatisfied/);
+  assert.match(source, /specSlideIds/);
+  assert.match(coverage, /evaluatedSlideIds/);
+});

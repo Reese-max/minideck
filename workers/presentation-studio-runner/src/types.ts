@@ -80,6 +80,15 @@ export interface DashiAudit {
   };
   visualJudge: { status: "not_configured" | "passed" | "failed"; issues: string[] };
   factualJudge: { status: "not_configured" | "passed" | "failed"; issues: string[] };
+  visualCoverage?: {
+    complete: boolean;
+    slideCount: number;
+    screenshotCount: number;
+    sheetCount: number;
+    expectedSlideIds: string[];
+    evaluatedSlideIds: string[];
+    sheets?: Array<{ kind: string | null; slideIds: string[] }>;
+  };
   evidence: Array<{ check: string; passed: boolean; detail: string }>;
   blockedReason?: string;
 }

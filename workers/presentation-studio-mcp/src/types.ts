@@ -174,4 +174,12 @@ export interface AuditSummary {
   blockerCount?: number;
   majorIssueCount?: number;
   slideScores?: Array<{ slideId?: string; score?: number }>;
+  visualCoverage?: {
+    complete?: boolean;
+    slideCount?: number;
+    screenshotCount?: number;
+    sheetCount?: number;
+    expectedSlideIds?: string[];
+    evaluatedSlideIds?: string[];
+  };
 }

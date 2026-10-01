@@ -1,6 +1,14 @@
 import { base64FromBytes, sha256Hex } from "./crypto";
 import type { DashiAudit, DashiJobInput, DashiJobResult, JsonObject, RunnerEnv } from "./types";
 import { shouldRunJudges } from "../runner/claim-integrity.mjs";
+import {
+  aggregateVisualReports,
+  expectedPreviewSheets,
+  previewArtifactsCoverSpec,
+  previewSheetRank,
+  specSlideIds,
+  visualCoverageSatisfied,
+} from "../runner/visual-coverage.mjs";
 
 const MAX_JUDGE_PROMPT_CHARS = 120_000;
 const MAX_PREVIEW_BYTES = 8 * 1024 * 1024;
@@ -240,34 +248,68 @@ export async function runJudges(
   if (!env.CF_AI_ROUTER_URL?.trim() || !env.CF_AI_ROUTER_API_KEY?.trim()) {
     return blockedJudgeResult(env, input, result, audit, "JUDGES_NOT_CONFIGURED");
   }
-  const preview = result.artifacts?.find((item) => item.kind === "preview");
-  if (!preview) {
-    return blockedJudgeResult(env, input, result, audit, "PREVIEW_ARTIFACT_MISSING");
+  const versionSlideIds = specSlideIds(result.version.spec);
+  const versionSlideCount =
+    isObject(result.version.spec) && Array.isArray(result.version.spec.slides)
+      ? result.version.spec.slides.length
+      : 0;
+  const coverage = audit.visualCoverage;
+  if (!visualCoverageSatisfied(coverage, versionSlideIds, versionSlideCount)) {
+    return blockedJudgeResult(env, input, result, audit, "VISUAL_COVERAGE_INCOMPLETE");
   }
-  const previewObject = await env.BUCKET.get(preview.r2Key);
-  if (!previewObject || previewObject.size > MAX_PREVIEW_BYTES) {
-    return blockedJudgeResult(env, input, result, audit, "PREVIEW_ARTIFACT_UNAVAILABLE");
+  const expectedSheets = expectedPreviewSheets(versionSlideIds);
+  const sheetArtifacts = (result.artifacts ?? [])
+    .filter((item) => previewSheetRank(item.kind) >= 0)
+    .sort((a, b) => previewSheetRank(a.kind) - previewSheetRank(b.kind));
+  if (
+    sheetArtifacts.length === 0 ||
+    coverage?.sheetCount !== expectedSheets.length ||
+    !previewArtifactsCoverSpec(
+      sheetArtifacts.map((artifact) => artifact.kind),
+      versionSlideIds,
+    )
+  ) {
+    return blockedJudgeResult(env, input, result, audit, "VISUAL_PREVIEW_SHEETS_MISSING");
   }
-  const previewBytes = new Uint8Array(await previewObject.arrayBuffer());
-  const visualMessages: JsonObject[] = [
-    {
-      role: "system",
-      content: "You are an independent presentation visual judge. Return JSON only with score, everySlideScoreMin, pass, and issues. Judge projection readability, hierarchy, density, consistency, and audience fit. Do not excuse defects because the renderer claims success. pass requires score >= 80, everySlideScoreMin >= 80, and no blocker or major issue.",
-    },
-    {
-      role: "user",
-      content: [
-        {
-          type: "text",
-          text: `Profile guidelines and slide spec:\n${clipJson({ profile: input.profile, spec: result.version.spec }, 100_000)}`,
-        },
-        {
-          type: "image_url",
-          image_url: { url: `data:image/png;base64,${base64FromBytes(previewBytes)}`, detail: "high" },
-        },
-      ],
-    },
-  ];
+  const sheetBytes: Uint8Array[] = [];
+  const prefix = env.R2_PREFIX?.trim() || "presentation-studio/";
+  const expectedPrefix = `${prefix.endsWith("/") ? prefix : prefix + "/"}projects/${input.projectId}/jobs/${input.jobId}/`;
+  for (const sheet of sheetArtifacts) {
+    // Each sheet must be the exact object the storage endpoint would have
+    // derived for this job + kind; a claimed key pointing elsewhere (or a
+    // duplicate of another sheet's key) fails closed.
+    if (sheet.r2Key !== `${expectedPrefix}${sheet.kind}.png`) {
+      return blockedJudgeResult(env, input, result, audit, "PREVIEW_ARTIFACT_UNAVAILABLE");
+    }
+    const object = await env.BUCKET.get(sheet.r2Key);
+    if (!object || object.size > MAX_PREVIEW_BYTES) {
+      return blockedJudgeResult(env, input, result, audit, "PREVIEW_ARTIFACT_UNAVAILABLE");
+    }
+    sheetBytes.push(new Uint8Array(await object.arrayBuffer()));
+  }
+  const visualCalls = sheetArtifacts.map((artifact, index) => {
+    const slideIds = expectedSheets[index]?.slideIds ?? [];
+    const messages: JsonObject[] = [
+      {
+        role: "system",
+        content: "You are an independent presentation visual judge. Return JSON only with score, everySlideScoreMin, pass, and issues. Judge projection readability, hierarchy, density, consistency, and audience fit for the contact sheet, which covers only the listed slide ids. Do not excuse defects because the renderer claims success. pass requires score >= 80, everySlideScoreMin >= 80, and no blocker or major issue.",
+      },
+      {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: `Profile guidelines and covered slide ids ${JSON.stringify(slideIds)}:\n${clipJson({ profile: input.profile, spec: result.version!.spec }, 100_000)}`,
+          },
+          {
+            type: "image_url",
+            image_url: { url: `data:image/png;base64,${base64FromBytes(sheetBytes[index])}`, detail: "high" },
+          },
+        ],
+      },
+    ];
+    return callRouter(env, "free-vision", messages);
+  });
   const factualSpec = input.spec || result.version.spec;
   const factualMessages: JsonObject[] = [
     {
@@ -283,10 +325,12 @@ export async function runJudges(
   let visual: JudgeReport;
   let factual: JudgeReport;
   try {
-    [visual, factual] = await Promise.all([
-      callRouter(env, "free-vision", visualMessages),
+    const [sheetReports, factualReport] = await Promise.all([
+      Promise.all(visualCalls),
       callRouter(env, env.CF_AI_ROUTER_MODEL?.trim() || "free-general", factualMessages),
     ]);
+    visual = aggregateVisualReports(sheetReports);
+    factual = factualReport;
   } catch (error) {
     const failedAudit = baseAuditForFailure(
       audit,
