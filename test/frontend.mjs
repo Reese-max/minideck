@@ -105,6 +105,40 @@ const cleanTie = await globalThis.MD.iteration.run({
 assert.equal(cleanTie.reason, "clean");
 assert.equal(cleanTie.best.version, 2);
 console.log("TASK_7_5_LATEST_TIE_PASS best=v2");
+
+// Publish/unpublish must be explicit POSTs carrying the project token, never a
+// silent side effect of another action.
+const shareCalls = [];
+globalThis.fetch = async (path, init) => {
+  shareCalls.push({ path, init });
+  return new Response(
+    JSON.stringify({ published: true, version: 3, published_at: 7 }),
+    { headers: { "content-type": "application/json" } },
+  );
+};
+try {
+  assert.deepEqual(await globalThis.MD.api.publish("deck-1", 3), {
+    published: true,
+    version: 3,
+    published_at: 7,
+  });
+  assert.deepEqual(await globalThis.MD.api.unpublish("deck-1"), {
+    published: true,
+    version: 3,
+    published_at: 7,
+  });
+} finally {
+  globalThis.fetch = originalFetch;
+}
+assert.deepEqual(
+  shareCalls.map(({ path, init }) => [path, init.method, init.body]),
+  [
+    ["/api/projects/deck-1/publish", "POST", '{"version":3}'],
+    ["/api/projects/deck-1/unpublish", "POST", "{}"],
+  ],
+);
+console.log("TASK_7_5_PUBLISH_API_PASS");
+
 console.log("TASK_6_OPTIMIZE_PROMPT_PASS");
 console.log("TASK_5_FRONTEND_PIPELINE_PASS");
 await import("./hq-mock.mjs");

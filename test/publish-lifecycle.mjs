@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { readFileSync } from "node:fs";
-import { assertD1Initialized } from "../src/store.js";
 import worker from "../src/worker.js";
 import { createD1, createEnv, stubTurnstile } from "./harness.mjs";
 
@@ -159,9 +158,28 @@ try {
 
   // 0d. Reading a project before migrations/0002 runs would 500 on every
   //     project path; the public quota endpoint must name the missing migration.
-  await assert.rejects(assertD1Initialized(createD1("../test/fixtures/legacy-projects.sql")), /0002_published_head\.sql/);
-  await assertD1Initialized(createEnv().DB);
-  console.log("PASS 舊 schema 在公開端點被辨識為缺少 0002 migration");
+  const legacyQuotaEnv = createEnv({
+    DB: createD1("../test/fixtures/legacy-projects.sql"),
+  });
+  const legacyQuota = await worker.fetch(
+    new Request("https://minideck.test/api/quota", {
+      headers: { "CF-Connecting-IP": "2001:db8::legacy" },
+    }),
+    legacyQuotaEnv,
+  );
+  assert.equal(legacyQuota.status, 503);
+  assert.match(
+    (await legacyQuota.json()).error,
+    /0002_published_head\.sql/,
+  );
+  const readyQuota = await worker.fetch(
+    new Request("https://minideck.test/api/quota", {
+      headers: { "CF-Connecting-IP": "2001:db8::ready" },
+    }),
+    createEnv(),
+  );
+  assert.equal(readyQuota.status, 200);
+  console.log("PASS 未套用 0002 migration 時公開額度端點指名缺少的 migration");
 
   // 1. Create project + save v1; anonymous /p/:id must NOT serve the draft.
   const createRes = await worker.fetch(

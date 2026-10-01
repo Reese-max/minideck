@@ -809,6 +809,11 @@ export default {
       return json({ error: "找不到此路由" }, 404);
     } catch (error) {
       console.error("request_failed", error);
+      // A missing migration is an operator error, not a runtime fault: name it
+      // instead of hiding it behind a generic 500 that only the logs explain.
+      if (/D1 schema|缺少 DB 綁定/.test(String(error?.message ?? ""))) {
+        return json({ error: error.message }, 503);
+      }
       return json({ error: "服務處理失敗" }, 500);
     }
   },
