@@ -2,10 +2,12 @@
   "name": "minideck",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "description": "Cloudflare Worker scaffold for minideck",
   "scripts": {
     "dev": "wrangler dev --port 8787",
-    "check": "echo 'No checks configured yet'"
+    "test": "node --import ./test/register-loader.mjs test/security.mjs && node --import ./test/register-loader.mjs test/token-client.mjs && node --import ./test/register-loader.mjs test/storage-cleanup.mjs && node --import ./test/register-loader.mjs test/frontend.mjs && node --import ./test/register-loader.mjs test/judge-mock.mjs && node --import ./test/register-loader.mjs test/persona-historical-scope.mjs && node --test workers/presentation-studio-mcp/test/contract.test.mjs",
+    "check": "npm run test"
   },
   "devDependencies": {
     "html-to-image": "^1.11.13",
