@@ -147,6 +147,8 @@ try {
   assert.equal(anonBeforePublish.status, 404);
   const badVersionParam = await player(id, { version: "abc" });
   assert.equal(badVersionParam.status, 400);
+  const anonDraftProbe = await player(id, { version: 1 });
+  assert.equal(anonDraftProbe.status, 404);
   const anonState = await api(id, "");
   assert.equal(anonState.status, 403);
   console.log("PASS 未發佈專案的匿名 /p/:id 回 404，不暴露草稿；參數與狀態端點同步受控");
@@ -332,7 +334,7 @@ try {
   const anonAfterUnpublish = await player(id);
   assert.equal(anonAfterUnpublish.status, 404);
   const anonAnyVersion = await player(id, { version: 3 });
-  assert.equal(anonAnyVersion.status, 403);
+  assert.equal(anonAnyVersion.status, 404);
   const ownerDeck = await api(id, "/deck?version=3", { token });
   assert.equal(ownerDeck.status, 200);
   const state5 = await projectState(id, token);
@@ -350,6 +352,24 @@ try {
   const ownerDeleted = await api(id, "/deck?version=1", { token });
   assert.equal(ownerDeleted.status, 404);
   console.log("PASS 專案刪除後公開連結與所有版本立即失效");
+
+  // 16. Deck HTML containing String.replace replacement patterns ($&, $', $9)
+  //     must reach the player verbatim — a replacement-string splice would
+  //     corrupt or drop deck content.
+  const saveSentinel = await saveDeck(
+    idB,
+    tokenB,
+    deckHtml("$&PRICE_$'_$9_TAIL"),
+  );
+  assert.equal(saveSentinel.status, 200);
+  const pubSentinel = await publish(idB, tokenB, 3);
+  assert.equal(pubSentinel.status, 200);
+  const sentinelPlayer = await player(idB);
+  assert.equal(sentinelPlayer.status, 200);
+  const sentinelHtml = await sentinelPlayer.text();
+  assert.ok(sentinelHtml.includes("$&amp;PRICE_$'_$9_TAIL"));
+  assert.ok(!sentinelHtml.includes("__MINIDECK_DECK_HTML__"));
+  console.log("PASS 播放器原樣呈現含 $ 取代樣式的 deck 內容");
 
   console.log("ALL PUBLISH LIFECYCLE ACCEPTANCE CRITERIA PASSED");
 } finally {

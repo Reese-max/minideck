@@ -1398,8 +1398,21 @@ html,body{margin:0!important;padding:0!important;background:#fff!important}
       );
       if (!response.ok) throw await apiError(response);
       const html = await response.text();
-      const url = URL.createObjectURL(new Blob([html], { type: "text/html" }));
-      window.open(url, "_blank", "noopener");
+      const previewHtml = html.replace(
+        "<head>",
+        `<head><base href="${location.origin}/">`,
+      );
+      const url = URL.createObjectURL(
+        new Blob([previewHtml], { type: "text/html" }),
+      );
+      const opened = window.open(url, "_blank", "noopener");
+      if (opened) {
+        opened.addEventListener("load", () => URL.revokeObjectURL(url), {
+          once: true,
+        });
+      } else {
+        URL.revokeObjectURL(url);
+      }
       console.log(
         "MD public_preview_opened",
         `project=${currentProjectId}`,

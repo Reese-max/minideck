@@ -701,6 +701,11 @@ async function getPlayerResponse(request, env, id) {
   if (version !== publishedVersion) {
     const token = request.headers.get("X-Project-Token")?.trim();
     if (!(await verifyProjectToken(token, project.access_token_hash))) {
+      // An unpublished project answers every anonymous path with 404 so the
+      // existence of drafts cannot be probed through status codes.
+      if (publishedVersion < 1) {
+        return json({ error: "簡報尚未發佈" }, 404);
+      }
       return json({ error: "版本未公開發佈，需專案權杖" }, 403);
     }
   }
@@ -725,7 +730,7 @@ async function getPlayerResponse(request, env, id) {
   }
 
   return new Response(
-    template.replace("__MINIDECK_DECK_HTML__", escapeHtml(deck)),
+    template.replace("__MINIDECK_DECK_HTML__", () => escapeHtml(deck)),
     {
       headers: {
         "cache-control": "no-store",
