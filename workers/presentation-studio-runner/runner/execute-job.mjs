@@ -452,9 +452,7 @@ async function collectArtifacts(input, renderResult, audit, includeExports = {})
 async function execute(input) {
   if (!isObject(input) || typeof input.jobId !== "string") throw new Error("INVALID_JOB_INPUT");
   const integrityInput =
-    input.type === "revision" &&
-    isObject(input.spec) &&
-    isObject(input.payload?.specPatch)
+    isObject(input.spec) && isObject(input.payload?.specPatch)
       ? { ...input, spec: patchSpec(input.spec, input.payload.specPatch) }
       : input;
   return runWithClaimIntegrityGate(integrityInput, async () => {
@@ -490,7 +488,7 @@ async function execute(input) {
       }
       if (requested.has("html")) exportPass = exportPass ?? true;
     }
-    const audit = makeAudit(renderResult, input, exportPass);
+    const audit = makeAudit(renderResult, integrityInput, exportPass);
     const artifacts = await collectArtifacts(input, renderResult, audit, exportPaths);
     const finalGoal = await readJson(goal.goalPath);
     const rendererReport = {
