@@ -47,6 +47,15 @@ test("literal sensitive text cannot bypass a public claim binding", () => {
   assert.equal(checkClaimBoundary(spec, sourceMap).pass, false);
   assert.equal(checkClaimBoundary(safeSpec, sourceMap, [{ instruction: sentinel }]).pass, false);
   assert.equal(checkClaimBoundary(safeSpec, sourceMap, [{ claims: [{ claimId: "private-1", text: sentinel }] }]).pass, false);
+  assert.equal(checkClaimBoundary(safeSpec, sourceMap, [{ [sentinel]: "provider-visible object key" }]).pass, false);
+
+  const duplicatedSourceMap = {
+    claims: [
+      { claimId: "public-1", text: `A verified public fact ${sentinel}`, sensitive: false },
+      sourceMap.claims[1],
+    ],
+  };
+  assert.equal(checkClaimBoundary(safeSpec, duplicatedSourceMap).pass, false);
 });
 
 test("Judges require a passing deterministic claim gate and two safe specs", () => {
@@ -171,6 +180,32 @@ test("sensitive claims produce zero egress calls and a public control remains re
   assert.equal(judgeAllowed.allowed, true);
   assert.deepEqual(calls, { provider: 1, render: 1, preview: 1, artifactUpload: 1, judgeRouter: 1 });
   assert.equal(JSON.stringify(rendered).includes(sentinel), true);
+
+  const beforeDuplicate = { ...calls };
+  const duplicatedSecretInput = {
+    ...publicInput,
+    spec: safeSpec,
+    sourceMap: {
+      claims: [
+        { claimId: "public-1", text: `A verified public fact ${sentinel}`, sensitive: false },
+        ...sourceMap.claims.filter((claim) => claim.claimId === "private-1"),
+      ],
+    },
+  };
+  const duplicateProvider = await runWithClaimBoundary(duplicatedSecretInput, async () => {
+    calls.provider += 1;
+    return "provider called";
+  });
+  const duplicateJudge = await runWithJudgeBoundary(duplicatedSecretInput, publicJudgeResult, async () => {
+    calls.judgeRouter += 1;
+    return "judge called";
+  });
+  const duplicateBlocked = await execute(duplicatedSecretInput, hooks);
+  assert.equal(duplicateProvider.allowed, false);
+  assert.equal(duplicateJudge.allowed, false);
+  assert.equal(duplicateBlocked.status, "blocked");
+  assert.equal(JSON.stringify(duplicateBlocked).includes(sentinel), false);
+  assert.deepEqual(calls, beforeDuplicate);
 });
 
 test("unbound sensitive source text is absent from the Dashi source map", async () => {

@@ -38,6 +38,7 @@ export function checkClaimBoundary(spec, sourceMap, extraContent = []) {
           (claim && isSensitive(claim))) return true;
     }
     for (const [key, member] of Object.entries(value)) {
+      if (sensitiveTexts.some((text) => key.includes(text))) return true;
       if (key === "sourceClaimIds") {
         if (!Array.isArray(member) || member.some((id) => {
           const claim = typeof id === "string" ? claims.get(id) : null;
@@ -63,7 +64,14 @@ export function checkClaimBoundary(spec, sourceMap, extraContent = []) {
     }
     return false;
   }
-  return inspect([spec, ...extraContent]) ? BLOCKED : ALLOWED;
+  // The Dashi source-map file keeps public claim records, so scan that exact
+  // safe view too. Sensitive claim records are omitted because their text is
+  // redacted before the file is written; duplicated sensitive text in a
+  // public record or metadata must still block before any egress.
+  const safeSourceMap = isObject(sourceMap) && Array.isArray(sourceMap.claims)
+    ? { ...sourceMap, claims: sourceMap.claims.filter((claim) => !isObject(claim) || !isSensitive(claim)) }
+    : sourceMap;
+  return inspect([spec, ...extraContent, safeSourceMap]) ? BLOCKED : ALLOWED;
 }
 
 /** Keep IDs for binding checks without carrying sensitive claim text into Dashi. */
