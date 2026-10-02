@@ -114,6 +114,9 @@ function projectToken() {
 }
 
 async function authorizeProject(request, env, id) {
+  if (!id || !/^[a-zA-Z0-9_-]{1,64}$/.test(id)) {
+    return { project: null, response: json({ error: "專案識別碼無效" }, 400) };
+  }
   const project = await getProject(env.DB, id);
   if (!project) {
     return { project: null, response: json({ error: "專案不存在" }, 404) };
@@ -610,7 +613,10 @@ async function deleteProject(request, env, id) {
   }
 }
 
-async function getDeckResponse(env, id, versionText) {
+async function getDeckResponse(request, env, id, versionText) {
+  const access = await authorizeProject(request, env, id);
+  if (access.response) return access.response;
+
   let version;
   if (versionText !== null) {
     if (!/^\d+$/.test(versionText) || Number(versionText) < 1) {
@@ -642,9 +648,29 @@ async function getImageResponse(env, hash) {
 }
 
 async function getPlayerResponse(request, env, id) {
-  const result = await readDeck(env.DB, env.BUCKET, id);
+  if (!id || !/^[a-zA-Z0-9_-]{1,64}$/.test(id)) {
+    return json({ error: "專案識別碼無效" }, 400);
+  }
+  const url = new URL(request.url);
+  const versionText = url.searchParams.get("version");
+  let requestedVersion = null;
+  if (versionText !== null) {
+    if (!/^\d+$/.test(versionText) || Number(versionText) < 1) {
+      return json({ error: "版本編號無效" }, 400);
+    }
+    requestedVersion = Number(versionText);
+  }
+
+  const result = await readDeck(env.DB, env.BUCKET, id, requestedVersion);
   if (!result.project) return json({ error: "專案不存在" }, 404);
   if (!result.deck) return json({ error: "找不到簡報版本" }, 404);
+
+  if (requestedVersion !== null && requestedVersion !== Number(result.project.current_version)) {
+    const token = request.headers.get("X-Project-Token")?.trim();
+    if (!(await verifyProjectToken(token, result.project.access_token_hash))) {
+      return json({ error: "歷史版本不公開，需專案權杖" }, 403);
+    }
+  }
 
   const templateResponse = await env.ASSETS.fetch(
     new URL("/play.html", request.url),
@@ -683,7 +709,7 @@ export default {
 
       const deckMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/deck$/);
       if (deckMatch && request.method === "GET") {
-        return await getDeckResponse(env, deckMatch[1], url.searchParams.get("version"));
+        return await getDeckResponse(request, env, deckMatch[1], url.searchParams.get("version"));
       }
       if (deckMatch && request.method === "POST") {
         return await saveDeck(request, env, deckMatch[1]);
