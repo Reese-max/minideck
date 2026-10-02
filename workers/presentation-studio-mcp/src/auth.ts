@@ -5,6 +5,10 @@ import {
   sha256Hex,
   verifyPkce,
 } from "./crypto";
+import {
+  isImmutableOwnerId,
+  ownerIdFromGithubProfile,
+} from "./owner-id.mjs";
 import type { AuthPrincipal, Env } from "./types";
 
 const ACCESS_TOKEN_TTL_MS = 60 * 60 * 1000;
@@ -255,10 +259,7 @@ async function exchangeGithubCode(
     },
   });
   if (!userResponse.ok) return null;
-  const userBody = (await userResponse.json()) as { login?: unknown };
-  return typeof userBody.login === "string" && userBody.login.length <= 200
-    ? userBody.login
-    : null;
+  return ownerIdFromGithubProfile(await userResponse.json());
 }
 
 async function handleCallback(request: Request, env: Env): Promise<Response> {
@@ -304,8 +305,8 @@ async function handleCallback(request: Request, env: Env): Promise<Response> {
   }
   if (!githubCode) return textResponse("invalid_request", 400);
 
-  const ownerLogin = await exchangeGithubCode(request, env, githubCode);
-  if (!ownerLogin) return textResponse("oauth_exchange_failed", 502);
+  const ownerSubject = await exchangeGithubCode(request, env, githubCode);
+  if (!ownerSubject) return textResponse("oauth_exchange_failed", 502);
 
   const used = await env.DB.prepare(
     "UPDATE presentation_oauth_requests SET used_at = datetime('now') " +
@@ -326,7 +327,7 @@ async function handleCallback(request: Request, env: Env): Promise<Response> {
       requestRow.client_id,
       requestRow.redirect_uri,
       requestRow.code_challenge,
-      ownerLogin,
+      ownerSubject,
       new Date(Date.now() + AUTH_CODE_TTL_MS).toISOString(),
     )
     .run();
@@ -373,6 +374,7 @@ async function handleToken(request: Request, env: Env): Promise<Response> {
     }>();
   if (
     !codeRow ||
+    !isImmutableOwnerId(codeRow.owner_login) ||
     codeRow.used_at ||
     codeRow.client_id !== clientId ||
     codeRow.redirect_uri !== redirectUri ||
@@ -413,6 +415,7 @@ async function handleRefreshToken(
     }>();
   if (
     !row ||
+    !isImmutableOwnerId(row.owner_login) ||
     row.revoked_at ||
     !row.refresh_expires_at ||
     new Date(row.refresh_expires_at).getTime() <= Date.now()
@@ -437,7 +440,7 @@ async function handleRefreshToken(
 
 async function issueTokens(
   env: Env,
-  ownerLogin: string,
+  ownerSubject: string,
 ): Promise<Response> {
   const accessToken = randomToken(32);
   const refreshToken = randomToken(32);
@@ -451,7 +454,7 @@ async function issueTokens(
     .bind(
       await sha256Hex(accessToken),
       await sha256Hex(refreshToken),
-      ownerLogin,
+      ownerSubject,
       JSON.stringify(DEFAULT_SCOPES),
       accessExpiresAt,
       refreshExpiresAt,
@@ -491,6 +494,7 @@ export async function authenticateMcpRequest(
     }>();
   if (
     !row ||
+    !isImmutableOwnerId(row.owner_login) ||
     row.revoked_at ||
     new Date(row.access_expires_at).getTime() <= Date.now()
   ) {
