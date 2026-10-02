@@ -1,4 +1,5 @@
 import { isUuid } from "./crypto";
+import { checkClaimBoundary, runWithClaimBoundary } from "../runner/claim-boundary.mjs";
 import type { ClaimedJob, DashiJobResult, JsonObject, RunnerEnv } from "./types";
 
 const MAX_SOURCE_TEXT_BYTES = 160_000;
@@ -96,7 +97,7 @@ function normalizeSpec(
   };
 }
 
-async function loadContext(env: RunnerEnv, job: ClaimedJob): Promise<JsonObject> {
+async function loadContext(env: RunnerEnv, job: ClaimedJob): Promise<{ context: JsonObject; sourceMap: JsonObject }> {
   const project = await env.DB.prepare(
     "SELECT title, brief, profile_id FROM presentation_projects WHERE id = ?",
   ).bind(job.projectId).first<ProjectRow>();
@@ -128,7 +129,7 @@ async function loadContext(env: RunnerEnv, job: ClaimedJob): Promise<JsonObject>
     if (totalBytes > MAX_TOTAL_CONTEXT_BYTES) break;
     sources.push({ sourceId: source.id, fileName: source.file_name, mimeType: source.mime_type, text });
   }
-  return {
+  const context: JsonObject = {
     project: { title: project.title, brief: project.brief, profileId: project.profile_id },
     sources,
     claims: claimRows.results
@@ -140,6 +141,14 @@ async function loadContext(env: RunnerEnv, job: ClaimedJob): Promise<JsonObject>
         sourceLocation: claim.source_location,
       })),
   };
+  const sourceMap = {
+    claims: claimRows.results.map((claim) => ({
+      claimId: claim.id.split(":").slice(1).join(":") || claim.id,
+      text: claim.claim_text,
+      sensitive: claim.sensitive,
+    })),
+  };
+  return { context, sourceMap };
 }
 
 export async function runPlanner(
@@ -158,7 +167,8 @@ export async function runPlanner(
       error: "PLANNER_FALLBACK_NOT_CONFIGURED_PROVIDE_CHATGPT_SLIDE_SPEC",
     };
   }
-  const context = await loadContext(env, job);
+  const loaded = await loadContext(env, job);
+  const context = loaded.context;
   const prompt = {
     task: "Create a presentation-spec JSON for Dashi Presentation Studio v2.0.",
     constraints: [
@@ -170,7 +180,11 @@ export async function runPlanner(
     ],
     context,
   };
-  const response = await fetch(endpoint, {
+  const request = await runWithClaimBoundary({
+    spec: { slides: [] },
+    sourceMap: loaded.sourceMap,
+    sources: context,
+  }, () => fetch(endpoint, {
     method: "POST",
     headers: {
       authorization: `Bearer ${apiKey}`,
@@ -189,7 +203,11 @@ export async function runPlanner(
         { role: "user", content: JSON.stringify(prompt) },
       ],
     }),
-  });
+  }));
+  if (!request.allowed) {
+    return { status: "blocked", jobId: job.id, error: request.reason || "CLAIM_BOUNDARY_BLOCKED" };
+  }
+  const response = request.value;
   const responseText = await response.text();
   if (!response.ok) {
     return { status: "blocked", jobId: job.id, error: `PLANNER_ROUTER_ERROR_${response.status}` };
@@ -212,6 +230,9 @@ export async function runPlanner(
   const spec = parsed ? normalizeSpec(parsed, job.profileId, allowedClaimIds) : null;
   if (!spec) {
     return { status: "blocked", jobId: job.id, error: "PLANNER_OUTPUT_INVALID_SLIDE_SPEC" };
+  }
+  if (!checkClaimBoundary(spec, loaded.sourceMap).pass) {
+    return { status: "blocked", jobId: job.id, error: "CLAIM_BOUNDARY_BLOCKED" };
   }
   return { status: "succeeded", jobId: job.id, slideSpec: spec };
 }

@@ -1,4 +1,5 @@
 import { base64FromBytes, sha256Hex } from "./crypto";
+import { checkJudgeBoundary, runWithJudgeBoundary } from "../runner/claim-boundary.mjs";
 import type { DashiAudit, DashiJobInput, DashiJobResult, JsonObject, RunnerEnv } from "./types";
 import { shouldRunJudges } from "../runner/claim-integrity.mjs";
 
@@ -235,7 +236,10 @@ export async function runJudges(
   if (!result.version) return result;
   const audit = result.version.audit;
   if (!shouldRunJudges(result)) {
-    return blockedJudgeResult(env, input, result, audit, "CLAIM_INTEGRITY_FAILED");
+    return { status: "blocked", jobId: input.jobId, error: "CLAIM_INTEGRITY_FAILED" };
+  }
+  if (!checkJudgeBoundary(input, result).pass) {
+    return { status: "blocked", jobId: input.jobId, error: "CLAIM_BOUNDARY_BLOCKED" };
   }
   if (!env.CF_AI_ROUTER_URL?.trim() || !env.CF_AI_ROUTER_API_KEY?.trim()) {
     return blockedJudgeResult(env, input, result, audit, "JUDGES_NOT_CONFIGURED");
@@ -283,10 +287,14 @@ export async function runJudges(
   let visual: JudgeReport;
   let factual: JudgeReport;
   try {
-    [visual, factual] = await Promise.all([
+    const judgeCalls = await runWithJudgeBoundary(input, result, () => Promise.all([
       callRouter(env, "free-vision", visualMessages),
       callRouter(env, env.CF_AI_ROUTER_MODEL?.trim() || "free-general", factualMessages),
-    ]);
+    ]));
+    if (!judgeCalls.allowed) {
+      return { status: "blocked", jobId: input.jobId, error: judgeCalls.reason || "CLAIM_BOUNDARY_BLOCKED" };
+    }
+    [visual, factual] = judgeCalls.value;
   } catch (error) {
     const failedAudit = baseAuditForFailure(
       audit,
