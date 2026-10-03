@@ -230,3 +230,46 @@ test("unbound sensitive source text is absent from the Dashi source map", async 
   });
   assert.equal(inspected, true);
 });
+
+
+test("renderer output containing a sensitive sentinel is blocked before artifact collection", async () => {
+  let renderCalls = 0;
+  let collectCalls = 0;
+  const input = {
+    jobId: "renderer-sensitive-leak",
+    type: "render",
+    sourceMap,
+    spec: safeSpec,
+    profile: {},
+    payload: {},
+    title: "Fixture",
+    brief: "Fixture",
+  };
+  const blocked = await execute(input, {
+    async prepare(_input, workDir) {
+      const goalPath = join(workDir, "goal.json");
+      await writeFile(goalPath, JSON.stringify(safeSpec));
+      return { goalPath, mode: "fixture" };
+    },
+    async render(_goalPath, workDir) {
+      renderCalls += 1;
+      const deckDir = join(workDir, "deck");
+      await mkdir(deckDir);
+      await writeFile(join(deckDir, "index.html"), "<html>" + sentinel + "</html>");
+      return { deckDir, quality: {}, commands: {} };
+    },
+    async collect() {
+      collectCalls += 1;
+      return [];
+    },
+  });
+
+  assert.deepEqual(blocked, {
+    status: "blocked",
+    jobId: input.jobId,
+    error: "CLAIM_BOUNDARY_BLOCKED",
+  });
+  assert.equal(JSON.stringify(blocked).includes(sentinel), false);
+  assert.equal(renderCalls, 1);
+  assert.equal(collectCalls, 0);
+});
