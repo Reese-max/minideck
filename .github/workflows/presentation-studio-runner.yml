@@ -3,6 +3,10 @@ name: Presentation Studio Runner
 on:
   pull_request:
     paths:
+      - "src/**"
+      - "test/**"
+      - "package.json"
+      - "package-lock.json"
       - "workers/presentation-studio-runner/**"
       - "workers/presentation-studio-mcp/src/jobs.ts"
       - "workers/presentation-studio-mcp/src/presentation.ts"
@@ -27,7 +31,11 @@ jobs:
         with:
           node-version: "22"
           cache: npm
-          cache-dependency-path: workers/presentation-studio-runner/package-lock.json
+          cache-dependency-path: |
+            package-lock.json
+            workers/presentation-studio-runner/package-lock.json
+      - run: npm ci
+      - run: npm run check
       - run: cd workers/presentation-studio-runner && npm ci
       - run: cd workers/presentation-studio-runner && npx --no-install wrangler types
       - run: cd workers/presentation-studio-runner && npm run check
