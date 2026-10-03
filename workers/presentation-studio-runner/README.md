@@ -18,7 +18,35 @@ npm ci
 npx wrangler types
 npm run check
 npx wrangler deploy --dry-run
+npx wrangler deploy --dry-run --env preview --containers-rollout=none
+npx wrangler deploy --dry-run --env production --containers-rollout=none
 ```
+
+`--containers-rollout=none` keeps the named-environment dry-runs at config
+resolution: the top-level dry-run above already builds the image, so repeating
+that build twice more only slows CI down. The CI check job runs all three so a
+green top-level dry-run can no longer stand in for a deployable named
+environment.
+
+## Named environments do not inherit bindings
+
+Wrangler treats bindings and `vars` as non-inheritable: a key declared only at
+the top level of `wrangler.jsonc` is **not** applied to `--env preview` or
+`--env production`. Every D1, R2, service, Workflow, Durable Object/container
+binding and every `vars` entry is therefore repeated inside each `env` block, and
+`test/runner-wrangler-env.mjs` fails the build when the two drift apart. The only
+intentional difference is `POLLING_ENABLED`.
+
+Both environments deliberately reuse the same existing `presentation-studio` D1
+database, the `minideck` R2 bucket, and the `presentation-studio-mcp` service
+binding, because that MCP Worker has no named environments of its own. Preview is
+kept harmless by `POLLING_ENABLED=false` rather than by separate storage; give
+preview its own resources before enabling polling there.
+
+Secrets stay off this path: `PRESENTATION_RUNNER_TOKEN` and
+`CF_AI_ROUTER_API_KEY` are non-inheritable too and are injected per environment
+with `wrangler secret put <KEY> --env <preview|production>`. Never move them
+into `vars`.
 
 The Docker image is intentionally pinned to `dashi-ppt-skill@0.4.11`, Node 22,
 Chromium, and CJK fonts. The image uses Dashi as a distributed package and must
