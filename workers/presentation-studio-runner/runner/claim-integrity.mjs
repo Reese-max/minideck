@@ -1,3 +1,5 @@
+import { checkClaimBoundary } from "./claim-boundary.mjs";
+
 function isObject(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
@@ -28,30 +30,18 @@ export function claimTextMap(sourceMap) {
 }
 
 export function claimIntegrityCheck(input) {
-  const claims = new Map();
-  const duplicateIds = new Set();
-  for (const claim of Array.isArray(input?.sourceMap?.claims) ? input.sourceMap.claims : []) {
-    if (!isObject(claim) || typeof claim.claimId !== "string") continue;
-    if (claims.has(claim.claimId)) duplicateIds.add(claim.claimId);
-    else claims.set(claim.claimId, claim);
-  }
-  let failed = !isObject(input);
-  for (const slide of Array.isArray(input?.spec?.slides) ? input.spec.slides : []) {
-    if (!isObject(slide)) continue;
-    const slideClaims = slide.claims === undefined ? slide.sourceClaimIds : slide.claims;
-    if (slideClaims === undefined) continue;
-    if (!Array.isArray(slideClaims)) {
-      failed = true;
-      continue;
-    }
-    for (const claimId of slideClaims) {
-      const claim = typeof claimId === "string" ? claims.get(claimId) : null;
-      if (!claim || duplicateIds.has(claimId) || isSensitiveClaim(claim)) failed = true;
-    }
-  }
+  const boundary = isObject(input)
+    ? checkClaimBoundary(input.spec, input.sourceMap, [
+      input.profile,
+      input.title,
+      input.brief,
+      input.payload,
+      input.sources,
+    ])
+    : { pass: false, reason: "CLAIM_BOUNDARY_BLOCKED" };
   return {
-    exitCode: failed ? 1 : 0,
-    output: failed ? "claim integrity failed" : "all claim bindings resolve to non-sensitive source claims",
+    exitCode: boundary.pass ? 0 : 1,
+    output: boundary.pass ? "all claim bindings resolve to non-sensitive source claims" : "claim integrity failed",
   };
 }
 

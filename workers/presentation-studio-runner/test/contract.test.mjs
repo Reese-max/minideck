@@ -129,10 +129,85 @@ test("blocks sensitive claim effects before rendering and Judge egress", async (
   assert.equal(renderCalls, 1);
 });
 
+test("runner process blocks sensitive claim bindings before any side effect", () => {
+  const sentinel = "SENSITIVE_SENTINEL_E2E_EGRESS";
+  const runnerPath = fileURLToPath(new URL("../runner/execute-job.mjs", import.meta.url));
+  const run = (input) =>
+    spawnSync(process.execPath, [runnerPath], {
+      input: JSON.stringify(input),
+      encoding: "utf8",
+      timeout: 30_000,
+    });
+  const assertBlocked = (proc) => {
+    assert.equal(proc.status, 0, proc.stderr);
+    assert.equal(proc.signal, null);
+    const result = JSON.parse(proc.stdout.trim());
+    assert.equal(result.status, "blocked");
+    assert.equal(result.error, "CLAIM_INTEGRITY_FAILED");
+    assert.doesNotMatch(proc.stdout, new RegExp(sentinel));
+  };
+
+  assertBlocked(
+    run({
+      jobId: "e2e-sensitive",
+      type: "render",
+      spec: { slides: [{ id: "s1", claims: ["c-secret"] }] },
+      sourceMap: {
+        claims: [{ claimId: "c-secret", text: sentinel, sensitive: true }],
+      },
+    }),
+  );
+
+  assertBlocked(
+    run({
+      jobId: "e2e-unknown",
+      type: "render",
+      spec: { slides: [{ id: "s1", claims: ["c-missing"] }] },
+      sourceMap: { claims: [] },
+    }),
+  );
+
+  // A revision specPatch that binds a sensitive claim is gated on the
+  // patched spec before render, not on the pre-patch spec.
+  assertBlocked(
+    run({
+      jobId: "e2e-revision-patch",
+      type: "revision",
+      spec: { slides: [{ id: "s1", claims: ["c-pub"] }] },
+      sourceMap: {
+        claims: [
+          { claimId: "c-pub", text: "public fact" },
+          { claimId: "c-secret", text: sentinel, sensitive: true },
+        ],
+      },
+      payload: { specPatch: { slides: [{ id: "s1", claims: ["c-secret"] }] } },
+    }),
+  );
+
+  // specPatch is applied for every job type in prepareGoal, so a render job
+  // smuggling a sensitive binding through specPatch must fail closed too.
+  assertBlocked(
+    run({
+      jobId: "e2e-render-patch",
+      type: "render",
+      spec: { slides: [{ id: "s1", claims: ["c-pub"] }] },
+      sourceMap: {
+        claims: [
+          { claimId: "c-pub", text: "public fact" },
+          { claimId: "c-secret", text: sentinel, sensitive: true },
+        ],
+      },
+      payload: { specPatch: { slides: [{ id: "s1", claims: ["c-secret"] }] } },
+    }),
+  );
+});
+
 test("wires integrity preflight before render, revision planning, and Judges", async () => {
   const execution = await read("runner/execute-job.mjs");
   const workflow = await read("src/workflow.ts");
   const judges = await read("src/judges.ts");
+  const planner = await read("src/planner.ts");
+  const reviser = await read("src/reviser.ts");
 
   assert.ok(execution.includes("spec: patchSpec(input.spec, input.payload.specPatch)"));
   assert.ok(
@@ -140,11 +215,16 @@ test("wires integrity preflight before render, revision planning, and Judges", a
       execution.indexOf("await writeSources(input, workDir)"),
   );
   assert.ok(
-    workflow.indexOf("claimIntegrityCheck(input).exitCode") <
+    workflow.indexOf("const initialBoundary = checkClaimBoundary") <
       workflow.indexOf("async () => runRevisionPlanner(this.env, input)"),
   );
+  assert.ok(workflow.indexOf("const boundary = checkClaimBoundary") < workflow.indexOf("container.runJob(executionInput)"));
+  assert.ok(planner.indexOf("runWithClaimBoundary") < planner.indexOf("fetch(endpoint"));
+  assert.ok(reviser.indexOf("runWithClaimBoundary(input") < reviser.indexOf("fetch(endpoint"));
   assert.match(workflow, /runJudgeIfIntegrityPasses/);
   assert.match(judges, /shouldRunJudges\(result\)/);
+  assert.ok(judges.indexOf("shouldRunJudges(result)") < judges.indexOf("env.BUCKET.get(preview.r2Key)"));
+  assert.ok(judges.indexOf("runWithJudgeBoundary(input, result") < judges.indexOf('callRouter(env, "free-vision"'));
 });
 test("runner process blocks sensitive claim bindings before any side effect", () => {
   const sentinel = "SENSITIVE_SENTINEL_E2E_EGRESS";
