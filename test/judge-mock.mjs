@@ -51,3 +51,4 @@ console.log("PASS judge 額度不足回 429 且 MiniMax 呼叫數為 0");
 
 // 連帶執行 supplied specPatch 目標範圍回歸測試（同一 revision pipeline 主題）
 await import("./presentation-revision-scope.mjs");
+await import("./visual-coverage.mjs");

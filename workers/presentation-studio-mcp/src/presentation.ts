@@ -8,18 +8,16 @@ import {
 } from "./crypto";
 import {
   assertV2Configuration,
-  beginIdempotency,
-  finishIdempotency,
   getLatestVersion,
   getProfile,
   getProjectForOwner,
   getQualityPolicy,
   getVersionForOwner,
   parseJson,
-  releaseIdempotency,
-  stableStringify,
 } from "./db";
+import { runIdempotent, stableStringify } from "./idempotency.mjs";
 import { randomId, randomSeed, randomWorkflowRunId } from "./ids";
+import { specSlideIds, visualCoverageSatisfied } from "./visual-coverage.mjs";
 import type {
   ArtifactRow,
   AuditSummary,
@@ -138,30 +136,6 @@ function withoutKey<T extends { idempotencyKey?: string }>(value: T): Omit<T, "i
   const copy = { ...value };
   delete copy.idempotencyKey;
   return copy;
-}
-
-async function runIdempotent<T>(
-  env: Env,
-  toolName: string,
-  key: string | undefined,
-  input: unknown,
-  action: () => Promise<T>,
-): Promise<T> {
-  const reservationState = await beginIdempotency(env.DB, toolName, key, input);
-  if (reservationState && "existing" in reservationState) {
-    return reservationState.existing as T;
-  }
-  if (!reservationState || !("reservation" in reservationState)) {
-    return action();
-  }
-  try {
-    const output = await action();
-    await finishIdempotency(env.DB, reservationState.reservation, output);
-    return output;
-  } catch (error) {
-    await releaseIdempotency(env.DB, reservationState.reservation);
-    throw error;
-  }
 }
 
 function projectPrefix(env: Env, projectId: string): string {
@@ -765,21 +739,25 @@ async function requestRevision(
 ): Promise<unknown> {
   await assertV2Configuration(env);
   return runIdempotent(
-    env,
+    env.DB,
+    ownerId,
     "request_presentation_revision",
     input.idempotencyKey,
     withoutKey(input),
     async () => {
       const { project } = await getProjectForOwner(env.DB, input.projectId, ownerId);
+      if (input.versionId) {
+        await getVersionForOwner(env.DB, project.id, input.versionId, ownerId);
+      }
+      return project;
+    },
+    async (project) => {
       if (project.current_round >= project.max_rounds) {
         throw new Error("MAX_ROUNDS_REACHED: request manual review or change the project plan");
       }
       assertJsonSize(input.specPatch || null, 200_000, "SPEC_PATCH");
       const latest = await getLatestVersion(env.DB, project.id);
       const parentVersionId = input.versionId || latest?.version.id || null;
-      if (input.versionId) {
-        await getVersionForOwner(env.DB, project.id, input.versionId, ownerId);
-      }
       const jobId = randomId();
       const payload = {
         parentVersionId,
@@ -932,6 +910,20 @@ function approvalDecision(
   ) {
     reasons.push("slide_score_below_target_or_missing");
   }
+  const versionSpec = parseJson<{ slides?: unknown }>(version.spec_json, {});
+  const expectedSlideIds = specSlideIds(versionSpec);
+  const expectedSlideCount = Array.isArray(versionSpec.slides)
+    ? versionSpec.slides.length
+    : 0;
+  if (
+    !visualCoverageSatisfied(
+      audit.visualCoverage,
+      expectedSlideIds,
+      expectedSlideCount,
+    )
+  ) {
+    reasons.push("visual_coverage_incomplete");
+  }
   if ((audit.blockerCount ?? 0) > 0) reasons.push("blockers_present");
   if ((audit.majorIssueCount ?? 0) > 0) reasons.push("major_issues_present");
   return { pass: reasons.length === 0, reasons, audit };
@@ -944,18 +936,24 @@ async function approvePresentation(
 ): Promise<unknown> {
   await assertV2Configuration(env);
   return runIdempotent(
-    env,
+    env.DB,
+    ownerId,
     "approve_presentation",
     input.idempotencyKey,
     withoutKey(input),
     async () => {
       const { project } = await getProjectForOwner(env.DB, input.projectId, ownerId);
-      const { version, runtime } = await getVersionForOwner(
+      return {
+        project,
+        ...(await getVersionForOwner(
         env.DB,
         project.id,
         input.versionId,
         ownerId,
-      );
+        )),
+      };
+    },
+    async ({ project, version, runtime }) => {
       const decision = approvalDecision(project, version, await getQualityPolicy(env.DB));
       if (!decision.pass) {
         throw new Error(
@@ -1012,7 +1010,8 @@ async function exportPresentation(
 ): Promise<unknown> {
   await assertV2Configuration(env);
   return runIdempotent(
-    env,
+    env.DB,
+    ownerId,
     "export_presentation",
     input.idempotencyKey,
     withoutKey(input),
@@ -1026,6 +1025,9 @@ async function exportPresentation(
         );
       }
       await getVersionForOwner(env.DB, project.id, versionId, ownerId);
+      return { project, versionId };
+    },
+    async ({ project, versionId }) => {
       const jobId = randomId();
       const payload = {
         versionId,
@@ -1211,10 +1213,12 @@ export function registerPresentationTools(
       requireWriteScope();
       const input = rawInput as z.infer<z.ZodObject<typeof createInputSchema>>;
       const output = await runIdempotent(
-        env,
+        env.DB,
+        ownerId,
         "create_presentation",
         input.idempotencyKey,
         withoutKey(input),
+        async () => undefined,
         () => createPresentation(env, ownerId, input),
       );
       return result(output);

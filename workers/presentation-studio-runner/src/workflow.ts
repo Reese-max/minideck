@@ -7,6 +7,8 @@ import { DashiContainer } from "./container";
 import { runJudges } from "./judges";
 import { runPlanner } from "./planner";
 import { applyRevisionPatch, runRevisionPlanner } from "./reviser";
+import { runJudgeIfIntegrityPasses } from "../runner/claim-integrity.mjs";
+import { checkClaimBoundary, checkJudgeBoundary } from "../runner/claim-boundary.mjs";
 import type { DashiJobInput, DashiJobResult, JsonObject, RunnerEnv, WorkflowParams } from "./types";
 
 const RETRIES = {
@@ -39,7 +41,17 @@ export class PresentationWorkflow extends WorkflowEntrypoint<RunnerEnv, Workflow
         { retries: RETRIES, timeout: "5 minutes" },
         async () => loadJobInput(this.env, job) as any,
       )) as DashiJobInput;
-      if (job.type === "revision") {
+      const initialBoundary = checkClaimBoundary(input.spec, input.sourceMap, [
+        input.profile,
+        input.title,
+        input.brief,
+        input.payload,
+        input.sources,
+      ]);
+      if (!initialBoundary.pass) {
+        result = { status: "blocked", jobId: job.id, error: initialBoundary.reason || "CLAIM_BOUNDARY_BLOCKED" };
+      }
+      if (job.type === "revision" && !result) {
         const suppliedPatch = isObject(input.payload.specPatch) ? input.payload.specPatch : null;
         if (suppliedPatch) {
           const patchedInput = applyRevisionPatch(input, suppliedPatch);
@@ -80,6 +92,18 @@ export class PresentationWorkflow extends WorkflowEntrypoint<RunnerEnv, Workflow
       }
       const executionInput = input;
       if (!result) {
+        const boundary = checkClaimBoundary(executionInput.spec, executionInput.sourceMap, [
+          executionInput.profile,
+          executionInput.title,
+          executionInput.brief,
+          executionInput.payload,
+          executionInput.sources,
+        ]);
+        if (!boundary.pass) {
+          result = { status: "blocked", jobId: job.id, error: boundary.reason || "CLAIM_BOUNDARY_BLOCKED" };
+        }
+      }
+      if (!result) {
         result = (await step.do(
           `execute dashi job ${job.id}`,
           { retries: RETRIES, timeout: "35 minutes" },
@@ -92,15 +116,31 @@ export class PresentationWorkflow extends WorkflowEntrypoint<RunnerEnv, Workflow
           },
         )) as DashiJobResult;
       }
-      if (result.status === "succeeded" && result.version) {
+      if (result?.status === "succeeded" && result.version) {
         const rendererResult = result;
-        result = (await step.do(
-          `judge dashi job ${job.id}`,
-          { retries: RETRIES, timeout: "10 minutes" },
-          async () => {
-            return runJudges(this.env, executionInput, rendererResult) as any;
-          },
-        )) as DashiJobResult;
+        const judgeBoundary = checkJudgeBoundary(executionInput, rendererResult);
+        if (!judgeBoundary.pass) {
+          result = {
+            status: "blocked",
+            jobId: job.id,
+            error: judgeBoundary.reason || "CLAIM_BOUNDARY_BLOCKED",
+          };
+        } else {
+          const judged = await runJudgeIfIntegrityPasses(
+            rendererResult,
+            async () =>
+              (await step.do(
+                `judge dashi job ${job.id}`,
+                { retries: RETRIES, timeout: "10 minutes" },
+                async () => runJudges(this.env, executionInput, rendererResult) as any,
+              )) as DashiJobResult,
+          );
+          result = judged ?? {
+            status: "blocked",
+            jobId: job.id,
+            error: "CLAIM_INTEGRITY_FAILED",
+          };
+        }
       }
     } catch (error) {
       return step.do(`record failed job ${job.id}`, async () => {

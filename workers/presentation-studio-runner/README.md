@@ -57,7 +57,26 @@ For deployment, configure the shared `PRESENTATION_RUNNER_TOKEN` secret on
 both Workers. Configure `CF_AI_ROUTER_API_KEY` only on the runner; it is never
 exposed through the public MCP tool contract.
 
+Slide claim bindings are verified before any render begins: if a slide
+references a claim that is missing, duplicated, or marked sensitive, the job
+fails closed with `CLAIM_INTEGRITY_FAILED` and no Dashi render, artifact
+upload, or Judge call is attempted. Sensitive claim text is never expanded
+into deck content. Judges run only when the deterministic claim-integrity
+check in the render audit passed.
+
 The Dashi render result is passed to two separate Judge calls. A technically
 rendered deck is reviewable, but cannot be approved or exported until both
 independent Judge results are present, pass, and are recorded in the audit
 contract.
+
+The visual Judge is fed one contact sheet per batch of at most 20 slides
+(preview, preview-2, ... artifacts), and the audit records a visualCoverage
+receipt with the evaluated slide ids. If the screenshots do not cover every
+slide in the version's spec — for example a deck larger than one sheet — the
+Judges fail closed with VISUAL_COVERAGE_INCOMPLETE and no approvable audit is
+produced.
+The runner checks claim bindings and literal sensitive claim text before it
+starts Dashi or sends revision and Judge prompts. Unknown or sensitive bindings
+block the job with a generic error. Sensitive claim text is also removed from
+the source map copied into the Dashi container. A second check on generated
+goal and HTML content runs before artifact upload.

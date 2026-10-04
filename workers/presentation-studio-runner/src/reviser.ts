@@ -4,6 +4,7 @@ import {
   safeClaims,
 } from "./revision-patch.mjs";
 import type { DashiJobInput, JsonObject, RunnerEnv } from "./types";
+import { checkClaimBoundary, runWithClaimBoundary } from "../runner/claim-boundary.mjs";
 
 export { applyRevisionPatch } from "./revision-patch.mjs";
 
@@ -74,7 +75,7 @@ export async function runRevisionPlanner(
   const timeout = setTimeout(() => controller.abort(), 90_000);
   let response: Response;
   try {
-    response = await fetch(endpoint, {
+    const request = await runWithClaimBoundary(input, () => fetch(endpoint, {
       method: "POST",
       headers: {
         authorization: `Bearer ${apiKey}`,
@@ -108,7 +109,11 @@ export async function runRevisionPlanner(
         ],
       }),
       signal: controller.signal,
-    });
+    }));
+    if (!request.allowed) {
+      return { status: "blocked", error: request.reason || "CLAIM_BOUNDARY_BLOCKED" };
+    }
+    response = request.value;
   } finally {
     clearTimeout(timeout);
   }
@@ -125,6 +130,15 @@ export async function runRevisionPlanner(
   const patchedSpec = patch ? applySlideSpecPatch(input.spec, patch) : null;
   if (!patch || !patchedSpec) {
     return { status: "blocked", error: "REVISION_OUTPUT_INVALID_SPEC_PATCH" };
+  }
+  if (!checkClaimBoundary(patchedSpec, input.sourceMap, [
+    input.profile,
+    input.title,
+    input.brief,
+    input.payload,
+    input.sources,
+  ]).pass) {
+    return { status: "blocked", error: "CLAIM_BOUNDARY_BLOCKED" };
   }
   return { status: "succeeded", specPatch: patch, patchedSpec };
 }

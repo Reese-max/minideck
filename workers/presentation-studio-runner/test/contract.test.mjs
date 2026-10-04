@@ -1,10 +1,18 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 import {
   applyRevisionPatch,
   normalizeRevisionPatch,
 } from "../src/revision-patch.mjs";
+import { fileURLToPath } from "node:url";
+import {
+  claimIntegrityCheck,
+  claimTextMap,
+  runJudgeIfIntegrityPasses,
+  runWithClaimIntegrityGate,
+} from "../runner/claim-integrity.mjs";
 
 const root = new URL("../", import.meta.url);
 
@@ -161,4 +169,246 @@ test("changedSlides includes only slides whose JSON values actually change", () 
   assert.equal(result.spec.slides[0].content.items[0], "b");
   assert.equal(result.spec.slides[2].keyMessage, "revised-three");
   assert.deepEqual(input, original);
+});
+
+test("blocks sensitive claim effects before rendering and Judge egress", async () => {
+  const sentinel = "SENSITIVE_SENTINEL_MINIDECK_SECURITY_TEST";
+  const input = {
+    jobId: "sensitive-claim-test",
+    spec: { slides: [{ id: "s1", claims: ["claim-private"] }] },
+    sourceMap: {
+      claims: [{ claimId: "claim-private", text: sentinel, sensitive: true }],
+    },
+  };
+  let renderCalls = 0;
+  let uploadCalls = 0;
+  let judgeRouterCalls = 0;
+
+  const blocked = await runWithClaimIntegrityGate(input, async () => {
+    renderCalls += 1;
+    uploadCalls += 1;
+    return { status: "succeeded", html: sentinel, preview: sentinel };
+  });
+  assert.equal(blocked.status, "blocked");
+  assert.equal(blocked.error, "CLAIM_INTEGRITY_FAILED");
+  assert.doesNotMatch(JSON.stringify(blocked), /SENSITIVE_SENTINEL_MINIDECK_SECURITY_TEST/);
+  assert.equal(claimIntegrityCheck(input).exitCode, 1);
+  assert.equal(claimTextMap(input.sourceMap).has("claim-private"), false);
+
+  const judgeResult = await runJudgeIfIntegrityPasses(
+    {
+      status: "succeeded",
+      version: { audit: { deterministic: { claimIntegrity: false } } },
+    },
+    async () => {
+      judgeRouterCalls += 1;
+      return sentinel;
+    },
+  );
+  assert.equal(judgeResult, null);
+  assert.equal(renderCalls, 0);
+  assert.equal(uploadCalls, 0);
+  assert.equal(judgeRouterCalls, 0);
+
+  const safeInput = {
+    ...input,
+    sourceMap: {
+      claims: [{ claimId: "claim-private", text: sentinel, sensitive: false }],
+    },
+  };
+  const rendered = await runWithClaimIntegrityGate(safeInput, async () => {
+    renderCalls += 1;
+    return { status: "succeeded" };
+  });
+  assert.equal(rendered.status, "succeeded");
+  assert.equal(claimIntegrityCheck(safeInput).exitCode, 0);
+  assert.equal(claimTextMap(safeInput.sourceMap).get("claim-private"), sentinel);
+  assert.equal(renderCalls, 1);
+});
+
+test("runner process blocks sensitive claim bindings before any side effect", () => {
+  const sentinel = "SENSITIVE_SENTINEL_E2E_EGRESS";
+  const runnerPath = fileURLToPath(new URL("../runner/execute-job.mjs", import.meta.url));
+  const run = (input) =>
+    spawnSync(process.execPath, [runnerPath], {
+      input: JSON.stringify(input),
+      encoding: "utf8",
+      timeout: 30_000,
+    });
+  const assertBlocked = (proc) => {
+    assert.equal(proc.status, 0, proc.stderr);
+    assert.equal(proc.signal, null);
+    const result = JSON.parse(proc.stdout.trim());
+    assert.equal(result.status, "blocked");
+    assert.equal(result.error, "CLAIM_INTEGRITY_FAILED");
+    assert.doesNotMatch(proc.stdout, new RegExp(sentinel));
+  };
+
+  assertBlocked(
+    run({
+      jobId: "e2e-sensitive",
+      type: "render",
+      spec: { slides: [{ id: "s1", claims: ["c-secret"] }] },
+      sourceMap: {
+        claims: [{ claimId: "c-secret", text: sentinel, sensitive: true }],
+      },
+    }),
+  );
+
+  assertBlocked(
+    run({
+      jobId: "e2e-unknown",
+      type: "render",
+      spec: { slides: [{ id: "s1", claims: ["c-missing"] }] },
+      sourceMap: { claims: [] },
+    }),
+  );
+
+  // A revision specPatch that binds a sensitive claim is gated on the
+  // patched spec before render, not on the pre-patch spec.
+  assertBlocked(
+    run({
+      jobId: "e2e-revision-patch",
+      type: "revision",
+      spec: { slides: [{ id: "s1", claims: ["c-pub"] }] },
+      sourceMap: {
+        claims: [
+          { claimId: "c-pub", text: "public fact" },
+          { claimId: "c-secret", text: sentinel, sensitive: true },
+        ],
+      },
+      payload: { specPatch: { slides: [{ id: "s1", claims: ["c-secret"] }] } },
+    }),
+  );
+
+  // specPatch is applied for every job type in prepareGoal, so a render job
+  // smuggling a sensitive binding through specPatch must fail closed too.
+  assertBlocked(
+    run({
+      jobId: "e2e-render-patch",
+      type: "render",
+      spec: { slides: [{ id: "s1", claims: ["c-pub"] }] },
+      sourceMap: {
+        claims: [
+          { claimId: "c-pub", text: "public fact" },
+          { claimId: "c-secret", text: sentinel, sensitive: true },
+        ],
+      },
+      payload: { specPatch: { slides: [{ id: "s1", claims: ["c-secret"] }] } },
+    }),
+  );
+});
+
+test("wires integrity preflight before render, revision planning, and Judges", async () => {
+  const execution = await read("runner/execute-job.mjs");
+  const workflow = await read("src/workflow.ts");
+  const judges = await read("src/judges.ts");
+  const planner = await read("src/planner.ts");
+  const reviser = await read("src/reviser.ts");
+
+  assert.doesNotMatch(execution, /patchSpec/);
+  assert.match(execution, /SPEC_PATCH_REQUIRES_WORKFLOW_VALIDATION/);
+  assert.ok(
+    execution.indexOf("return runWithClaimIntegrityGate(integrityInput, async () => {") <
+      execution.indexOf("await writeSources(input, workDir)"),
+  );
+  assert.ok(
+    workflow.indexOf("const initialBoundary = checkClaimBoundary") <
+      workflow.indexOf("async () => runRevisionPlanner(this.env, input)"),
+  );
+  assert.ok(workflow.indexOf("const boundary = checkClaimBoundary") < workflow.indexOf("container.runJob(executionInput)"));
+  assert.ok(planner.indexOf("runWithClaimBoundary") < planner.indexOf("fetch(endpoint"));
+  assert.ok(reviser.indexOf("runWithClaimBoundary(input") < reviser.indexOf("fetch(endpoint"));
+  assert.match(workflow, /runJudgeIfIntegrityPasses/);
+  assert.match(judges, /shouldRunJudges\(result\)/);
+  assert.ok(judges.indexOf("shouldRunJudges(result)") < judges.indexOf("env.BUCKET.get(sheet.r2Key)"));
+  assert.ok(judges.indexOf("runWithJudgeBoundary(input, result") < judges.indexOf('callRouter(env, "free-vision"'));
+});
+
+test("visual judge must cover every slide before approval can pass", async () => {
+  const execution = await read("runner/execute-job.mjs");
+  const judges = await read("src/judges.ts");
+  const storage = await read("src/storage.ts");
+  const coverage = await read("runner/visual-coverage.mjs");
+  assert.doesNotMatch(execution, /\.slice\(0,\s*20\)/);
+  assert.match(execution, /planVisualCoverage/);
+  assert.match(judges, /VISUAL_COVERAGE_INCOMPLETE/);
+  assert.match(judges, /VISUAL_PREVIEW_SHEETS_MISSING/);
+  assert.match(judges, /aggregateVisualReports/);
+  assert.match(judges, /visualCoverageSatisfied/);
+  assert.match(storage, /preview-\[2-5\]/);
+  assert.match(coverage, /PREVIEW_TILES_PER_SHEET\s*=\s*20/);
+  assert.match(coverage, /MAX_PREVIEW_SHEETS/);
+});
+test("runner process blocks sensitive claim bindings before any side effect", () => {
+  const sentinel = "SENSITIVE_SENTINEL_E2E_EGRESS";
+  const runnerPath = fileURLToPath(new URL("../runner/execute-job.mjs", import.meta.url));
+  const run = (input) =>
+    spawnSync(process.execPath, [runnerPath], {
+      input: JSON.stringify(input),
+      encoding: "utf8",
+      timeout: 30_000,
+    });
+  const assertBlocked = (proc) => {
+    assert.equal(proc.status, 0, proc.stderr);
+    assert.equal(proc.signal, null);
+    const result = JSON.parse(proc.stdout.trim());
+    assert.equal(result.status, "blocked");
+    assert.equal(result.error, "CLAIM_INTEGRITY_FAILED");
+    assert.doesNotMatch(proc.stdout, new RegExp(sentinel));
+  };
+
+  assertBlocked(
+    run({
+      jobId: "e2e-sensitive",
+      type: "render",
+      spec: { slides: [{ id: "s1", claims: ["c-secret"] }] },
+      sourceMap: {
+        claims: [{ claimId: "c-secret", text: sentinel, sensitive: true }],
+      },
+    }),
+  );
+
+  assertBlocked(
+    run({
+      jobId: "e2e-unknown",
+      type: "render",
+      spec: { slides: [{ id: "s1", claims: ["c-missing"] }] },
+      sourceMap: { claims: [] },
+    }),
+  );
+
+  // A revision specPatch that binds a sensitive claim is gated on the
+  // patched spec before render, not on the pre-patch spec.
+  assertBlocked(
+    run({
+      jobId: "e2e-revision-patch",
+      type: "revision",
+      spec: { slides: [{ id: "s1", claims: ["c-pub"] }] },
+      sourceMap: {
+        claims: [
+          { claimId: "c-pub", text: "public fact" },
+          { claimId: "c-secret", text: sentinel, sensitive: true },
+        ],
+      },
+      payload: { specPatch: { slides: [{ id: "s1", claims: ["c-secret"] }] } },
+    }),
+  );
+
+  // specPatch is applied for every job type in prepareGoal, so a render job
+  // smuggling a sensitive binding through specPatch must fail closed too.
+  assertBlocked(
+    run({
+      jobId: "e2e-render-patch",
+      type: "render",
+      spec: { slides: [{ id: "s1", claims: ["c-pub"] }] },
+      sourceMap: {
+        claims: [
+          { claimId: "c-pub", text: "public fact" },
+          { claimId: "c-secret", text: sentinel, sensitive: true },
+        ],
+      },
+      payload: { specPatch: { slides: [{ id: "s1", claims: ["c-secret"] }] } },
+    }),
+  );
 });
