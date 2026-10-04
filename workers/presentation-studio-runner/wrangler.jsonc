@@ -63,11 +63,6 @@
     "CF_AI_ROUTER_URL": "https://cf-ai-router.irisx-tracker.workers.dev/v1/chat/completions",
     "CF_AI_ROUTER_MODEL": "free-general"
   },
-  // Wrangler never inherits bindings or vars from the top level into a named
-  // environment, so every non-inheritable key is redeclared per environment
-  // below. Both environments reuse the same existing D1/R2/MCP resources; the
-  // preview runner is only kept inert by POLLING_ENABLED=false.
-  // https://developers.cloudflare.com/workers/wrangler/environments/#non-inheritable-keys-and-environments
   "env": {
     "preview": {
       "name": "presentation-studio-runner-preview",
