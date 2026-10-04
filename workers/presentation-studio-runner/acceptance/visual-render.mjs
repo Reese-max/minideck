@@ -106,6 +106,13 @@ try {
   assert.equal(result.version.spec.slides.length, 21);
   const audit = result.version.audit;
   const coverage = audit.visualCoverage;
+  console.log(JSON.stringify({
+    phase: "actual-renderer-result",
+    status: result.status,
+    coverage,
+    deterministic: audit.deterministic,
+    failedChecks: audit.evidence.filter(check => check.passed !== true),
+  }));
   assert.equal(coverage.complete, true);
   assert.equal(coverage.screenshotCount, 21);
   assert.equal(coverage.sheetCount, 2);
