@@ -54,15 +54,37 @@ process.env.DASHI_ROOT = process.env.DASHI_ROOT || "/opt/skills/dashi-ppt";
 process.env.CHROME_PATH = "/usr/bin/chromium";
 const module = process.env.MINIDECK_RUNNER_MODULE || new URL("../runner/execute-job.mjs", import.meta.url).pathname;
 try {
-  // Use Dashi's own supported schema-v2 goal contract. Its scaffold creates
-  // four layout variants per logical slide, without provider-generated copy.
+  // Expand the established public smoke content with distinct short copy.
+  // Dashi's own scaffold and validators produce the supported schema-v2 goal;
+  // there are no synthetic renderer hooks or provider-generated inputs.
+  const fixturePath = process.env.MINIDECK_CONTENT_BRIEFS || new URL("../test/fixtures/content-briefs.json", import.meta.url);
+  const fixture = JSON.parse(await readFile(fixturePath, "utf8"));
+  const slides = Array.from({ length: 21 }, (_, index) => {
+    const slide = structuredClone(fixture[index === 0 ? 0 : index === 20 ? 2 : 1]);
+    slide.id = `s${String(index + 1).padStart(2, "0")}`;
+    slide.content.meta.pageLabel = String(index + 1).padStart(2, "0");
+    if (index !== 0 && index !== 20) {
+      const copy = slide.content.presentation;
+      for (const field of ["title", "titleShort", "summary", "summaryShort", "takeaway"]) {
+        copy[field] = `${index + 1} ${copy[field]}`;
+      }
+      for (const item of copy.items) {
+        item.label = `${index + 1} ${item.label}`;
+        item.detail = `${index + 1} ${item.detail}`;
+      }
+      slide.content.meta.panelTitle = `流程 ${index + 1}`;
+    }
+    return slide;
+  });
+  const briefsPath = `${directory}/content-briefs.json`;
+  await writeFile(briefsPath, JSON.stringify(slides));
   const goalPath = `${directory}/fixture-goal.json`;
   const scaffold = spawnSync("npm", [
     "--prefix", `${process.env.DASHI_ROOT}/project`, "run", "goal:scaffold", "--",
     "--title", "Synthetic coverage acceptance",
     "--goal", "Verify every rendered slide has visual evidence.",
-    "--theme", "theme07", "--pages", "21", "--layout-variants", "3",
-    "--seed", "visual-coverage-acceptance", "--workflow-run-id", "real-21",
+    "--theme", "theme07", "--pages", "21", "--content-briefs", briefsPath, "--layout-variants", "3",
+    "--seed", "ci-smoke", "--workflow-run-id", "real-21",
     "--out", goalPath,
   ], { cwd: directory, env: { ...process.env, INIT_CWD: directory }, encoding: "utf8" });
   assert.equal(scaffold.status, 0, scaffold.stderr || scaffold.error?.message);

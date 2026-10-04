@@ -89,6 +89,8 @@ jobs:
         run: |
           docker run --rm --network none --platform linux/amd64 \
             -v "$GITHUB_WORKSPACE/workers/presentation-studio-runner/acceptance:/tmp/acceptance:ro" \
+            -v "$GITHUB_WORKSPACE/workers/presentation-studio-runner/test/fixtures:/tmp/fixtures:ro" \
+            -e MINIDECK_CONTENT_BRIEFS=/tmp/fixtures/content-briefs.json \
             -e MINIDECK_RUNNER_MODULE=/app/runner/execute-job.mjs \
             presentation-studio-runner:test \
             node /tmp/acceptance/visual-render.mjs
