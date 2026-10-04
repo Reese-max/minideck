@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { pathToFileURL } from "node:url";
 
@@ -52,39 +53,30 @@ process.env.DASHI_STORAGE_HOST = `127.0.0.1:${server.address().port}`;
 process.env.DASHI_ROOT = process.env.DASHI_ROOT || "/opt/skills/dashi-ppt";
 process.env.CHROME_PATH = "/usr/bin/chromium";
 const module = process.env.MINIDECK_RUNNER_MODULE || new URL("../runner/execute-job.mjs", import.meta.url).pathname;
-const slides = Array.from({ length: 21 }, (_, index) => ({
-  id: `s${index + 1}`,
-  role: index === 0 ? "cover" : index === 20 ? "closing" : "process",
-  keyMessage: "Review every slide.",
-  content: { presentation: {
-    title: "Coverage map",
-    titleShort: "Coverage map",
-    summary: "Render, inspect, record and verify every slide.",
-    summaryShort: "Verify every slide.",
-    takeaway: "Keep a complete review receipt.",
-    items: [
-      { label: "Render", detail: "Produce the slide" },
-      { label: "Inspect", detail: "Review the visual" },
-      { label: "Record", detail: "Bind the slide ID" },
-      { label: "Verify", detail: "Check full coverage" },
-      { label: "Approve", detail: "Require all gates" },
-    ],
-  } },
-}));
-const input = {
-  jobId: "real-21",
-  projectId: "real-project",
-  type: "render",
-  title: "Synthetic coverage acceptance",
-  brief: "Verify every rendered slide has visual evidence.",
-  spec: { slides },
-  sourceMap: { claims: [] },
-  sources: [],
-  profile: { rendererBinding: { themePack: "theme07" } },
-  payload: {},
-  randomSeed: "visual-coverage-acceptance",
-};
 try {
+  // Use Dashi's own supported schema-v2 goal contract. Its scaffold creates
+  // four layout variants per logical slide, without provider-generated copy.
+  const goalPath = `${directory}/fixture-goal.json`;
+  const scaffold = spawnSync("npm", [
+    "--prefix", `${process.env.DASHI_ROOT}/project`, "run", "goal:scaffold", "--",
+    "--title", "Synthetic coverage acceptance",
+    "--goal", "Verify every rendered slide has visual evidence.",
+    "--theme", "theme07", "--pages", "21", "--layout-variants", "3",
+    "--seed", "visual-coverage-acceptance", "--workflow-run-id", "real-21",
+    "--out", goalPath,
+  ], { cwd: directory, env: { ...process.env, INIT_CWD: directory }, encoding: "utf8" });
+  assert.equal(scaffold.status, 0, scaffold.stderr || scaffold.error?.message);
+  const spec = JSON.parse(await readFile(goalPath, "utf8"));
+  assert.equal(spec.slides.length, 21);
+  assert.ok(spec.slides.every(slide => slide.variants.length === 4));
+  const expectedSlideIds = spec.slides.map(slide => slide.id);
+  const input = {
+    jobId: "real-21", projectId: "real-project", type: "render",
+    title: spec.title, brief: spec.goal, spec,
+    sourceMap: { claims: [] }, sources: [],
+    profile: { rendererBinding: { themePack: "theme07" } },
+    payload: {}, randomSeed: "visual-coverage-acceptance",
+  };
   const { execute } = await import(pathToFileURL(module));
   const result = await execute(input);
   await writeFile(`${directory}/result.json`, JSON.stringify(result, null, 2));
@@ -95,8 +87,8 @@ try {
   assert.equal(coverage.complete, true);
   assert.equal(coverage.screenshotCount, 21);
   assert.equal(coverage.sheetCount, 2);
-  assert.deepEqual(coverage.expectedSlideIds, slides.map(slide => slide.id));
-  assert.deepEqual(coverage.evaluatedSlideIds, slides.map(slide => slide.id));
+  assert.deepEqual(coverage.expectedSlideIds, expectedSlideIds);
+  assert.deepEqual(coverage.evaluatedSlideIds, expectedSlideIds);
   const previews = artifacts.filter(artifact => artifact.kind.startsWith("preview"));
   assert.deepEqual(previews.map(artifact => artifact.kind), ["preview", "preview-2"]);
   assert.deepEqual(previews.map(artifact => artifact.image), [
