@@ -84,3 +84,11 @@ jobs:
               test -s "$work/deck.pptx"
               test -s "$work/deck.pdf"
             '
+
+      - name: Render all 21 slides and verify production contact-sheet coverage
+        run: |
+          docker run --rm --network none --platform linux/amd64 \
+            -v "$GITHUB_WORKSPACE/workers/presentation-studio-runner/acceptance:/tmp/acceptance:ro" \
+            -e MINIDECK_RUNNER_MODULE=/app/runner/execute-job.mjs \
+            presentation-studio-runner:test \
+            node /tmp/acceptance/visual-render.mjs
