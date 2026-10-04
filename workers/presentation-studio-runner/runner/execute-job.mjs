@@ -2,10 +2,12 @@ import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { normalizeIntentionalDecorationOverflow } from "./deck-normalizer.mjs";
 import { claimIntegrityCheck, claimTextMap, runWithClaimIntegrityGate } from "./claim-integrity.mjs";
 import { planVisualCoverage } from "./visual-coverage.mjs";
+import { checkClaimBoundary, redactSensitiveClaims } from "./claim-boundary.mjs";
 
 const MAX_INPUT_BYTES = 40 * 1024 * 1024;
 const MAX_COMMAND_OUTPUT = 4 * 1024 * 1024;
@@ -182,7 +184,7 @@ async function writeSources(input, workDir) {
   // Workflow RPC payload. Dashi renders the ChatGPT-first spec; later judges
   // can read the immutable source objects by these metadata keys.
   await writeFile(join(workDir, "sources.json"), JSON.stringify(input.sources || [], null, 2));
-  await writeFile(join(workDir, "source-map.json"), JSON.stringify(input.sourceMap || {}, null, 2));
+  await writeFile(join(workDir, "source-map.json"), JSON.stringify(redactSensitiveClaims(input.sourceMap || {}), null, 2));
 }
 
 async function prepareGoal(input, workDir) {
@@ -485,12 +487,10 @@ async function collectArtifacts(input, renderResult, audit, includeExports = {},
   return artifacts;
 }
 
-async function execute(input) {
+export async function execute(input, { prepare = prepareGoal, render = runDashi, collect = collectArtifacts } = {}) {
   if (!isObject(input) || typeof input.jobId !== "string") throw new Error("INVALID_JOB_INPUT");
   const integrityInput =
-    input.type === "revision" &&
-    isObject(input.spec) &&
-    isObject(input.payload?.specPatch)
+    isObject(input.spec) && isObject(input.payload?.specPatch)
       ? { ...input, spec: patchSpec(input.spec, input.payload.specPatch) }
       : input;
   return runWithClaimIntegrityGate(integrityInput, async () => {
@@ -503,9 +503,9 @@ async function execute(input) {
   const workDir = await mkdtemp(join(tmpdir(), `presentation-studio-${input.jobId}-`));
   try {
     await writeSources(input, workDir);
-    const goal = await prepareGoal(input, workDir);
+    const goal = await prepare(input, workDir);
     if (goal.blocked) return { status: "blocked", jobId: input.jobId, error: goal.blocked };
-    const renderResult = await runDashi(goal.goalPath, workDir);
+    const renderResult = await render(goal.goalPath, workDir);
     let exportPaths = {};
     let exportPass;
     if (input.type === "export") {
@@ -526,10 +526,24 @@ async function execute(input) {
       }
       if (requested.has("html")) exportPass = exportPass ?? true;
     }
-    const coveragePlan = await planJobVisualCoverage(workDir);
-    const audit = makeAudit(renderResult, input, exportPass, coveragePlan);
-    const artifacts = await collectArtifacts(input, renderResult, audit, exportPaths, coveragePlan);
     const finalGoal = await readJson(goal.goalPath);
+    const renderedHtml = await readFile(join(renderResult.deckDir, "index.html"), "utf8");
+    const renderedBoundary = checkClaimBoundary(finalGoal, input.sourceMap, [
+      input.profile,
+      input.title,
+      input.brief,
+      input.payload,
+      input.sources,
+      renderedHtml,
+      renderResult.quality,
+      renderResult.commands,
+    ]);
+    if (!renderedBoundary.pass) {
+      return { status: "blocked", jobId: input.jobId, error: renderedBoundary.reason };
+    }
+    const coveragePlan = await planJobVisualCoverage(workDir);
+    const audit = makeAudit(renderResult, integrityInput, exportPass, coveragePlan);
+    const artifacts = await collect(input, renderResult, audit, exportPaths, coveragePlan);
     const rendererReport = {
       renderer: "dashi",
       dashiVersion: "0.4.11",
@@ -574,15 +588,17 @@ async function execute(input) {
   });
 }
 
-try {
-  const input = JSON.parse(await collectStdin());
-  const result = await execute(input);
-  process.stdout.write(JSON.stringify(result) + "\n");
-} catch (error) {
-  process.stdout.write(JSON.stringify({
-    status: "blocked",
-    jobId: null,
-    error: error instanceof Error ? error.message : "RUNNER_FAILED",
-  }) + "\n");
-  process.exitCode = 1;
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  try {
+    const input = JSON.parse(await collectStdin());
+    const result = await execute(input);
+    process.stdout.write(JSON.stringify(result) + "\n");
+  } catch (error) {
+    process.stdout.write(JSON.stringify({
+      status: "blocked",
+      jobId: null,
+      error: error instanceof Error ? error.message : "RUNNER_FAILED",
+    }) + "\n");
+    process.exitCode = 1;
+  }
 }

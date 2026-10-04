@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { test } from "node:test";
+import { runIdempotent } from "../src/idempotency.mjs";
 
 const root = new URL("../", import.meta.url);
 
@@ -75,4 +76,200 @@ test("approval fails closed when the visual coverage receipt misses slides", asy
   assert.match(source, /visualCoverageSatisfied/);
   assert.match(source, /specSlideIds/);
   assert.match(coverage, /evaluatedSlideIds/);
+});
+
+class IdempotencyD1 {
+  rows = new Map();
+
+  prepare(sql) {
+    const thisDb = this;
+    let values = [];
+    return {
+      bind(...args) {
+        values = args;
+        return this;
+      },
+      async first() {
+        const row = thisDb.rows.get(values[0]);
+        return row ? { ...row } : null;
+      },
+      async run() {
+        if (sql.startsWith("INSERT OR IGNORE")) {
+          const [key, toolName, requestHash, expiresAt] = values;
+          if (thisDb.rows.has(key)) return { meta: { changes: 0 } };
+          thisDb.rows.set(key, {
+            idempotency_key: key,
+            tool_name: toolName,
+            request_hash: requestHash,
+            result_json: "__pending__",
+            expires_at: expiresAt,
+          });
+          return { meta: { changes: 1 } };
+        }
+        if (sql.startsWith("UPDATE presentation_idempotency")) {
+          const [resultJson, key, requestHash] = values;
+          const row = thisDb.rows.get(key);
+          if (row?.request_hash === requestHash) row.result_json = resultJson;
+          return { meta: { changes: row?.request_hash === requestHash ? 1 : 0 } };
+        }
+        if (sql.startsWith("DELETE FROM presentation_idempotency")) {
+          const [key, second] = values;
+          const row = thisDb.rows.get(key);
+          const shouldDelete =
+            row &&
+            (sql.includes("expires_at = ?")
+              ? row.expires_at === second
+              : row.request_hash === second && row.result_json === "__pending__");
+          if (shouldDelete) thisDb.rows.delete(key);
+          return { meta: { changes: shouldDelete ? 1 : 0 } };
+        }
+        throw new Error("Unexpected D1 statement: " + sql);
+      },
+    };
+  }
+}
+
+test("idempotency keys are owner-scoped while same-owner create replays are cached", async () => {
+  const db = new IdempotencyD1();
+  const input = { brief: "Quarterly review", profileId: "board" };
+  const effects = [];
+  const create = (ownerId) =>
+    runIdempotent(
+      db,
+      ownerId,
+      "create_presentation",
+      "same-create-key-01",
+      input,
+      async () => ownerId,
+      async (authenticatedOwner) => {
+        effects.push(authenticatedOwner);
+        return {
+          ownerId: authenticatedOwner,
+          projectId: "project-" + authenticatedOwner,
+          jobId: "job-" + authenticatedOwner,
+        };
+      },
+    );
+
+  const ownerA = await create("owner-a");
+  const ownerB = await create("owner-b");
+  assert.equal(ownerA.projectId, "project-owner-a");
+  assert.equal(ownerB.projectId, "project-owner-b");
+  assert.notEqual(ownerA.projectId, ownerB.projectId);
+  assert.deepEqual(effects, ["owner-a", "owner-b"]);
+
+  assert.deepEqual(await create("owner-a"), ownerA);
+  assert.deepEqual(await create("owner-b"), ownerB);
+  assert.deepEqual(effects, ["owner-a", "owner-b"]);
+});
+
+test("same-owner changed input is rejected without repeating the cached effect", async () => {
+  const db = new IdempotencyD1();
+  let effects = 0;
+  const call = (input) =>
+    runIdempotent(
+      db,
+      "owner-a",
+      "create_presentation",
+      "same-input-key-01",
+      input,
+      async () => undefined,
+      async () => ({ projectId: "project-a", sequence: ++effects }),
+    );
+
+  const first = await call({ brief: "Original" });
+  assert.deepEqual(await call({ brief: "Original" }), first);
+  await assert.rejects(call({ brief: "Changed" }), /IDEMPOTENCY_KEY_REUSED/);
+  assert.equal(effects, 1);
+});
+
+test("project write tools perform owner preflight before entering cached actions", async () => {
+  const source = await read("src/presentation.ts");
+  const revision = source.match(/async function requestRevision\([\s\S]*?\n}\n\nfunction slideArray/);
+  const approval = source.match(/async function approvePresentation\([\s\S]*?\n}\n\nasync function exportPresentation/);
+  const exportRequest = source.match(/async function exportPresentation\([\s\S]*?\n}\n\nasync function/);
+
+  assert.ok(revision, "revision handler source is present");
+  assert.ok(approval, "approval handler source is present");
+  assert.ok(exportRequest, "export handler source is present");
+  assert.match(
+    revision[0],
+    /async \(\) => \{[\s\S]*getProjectForOwner\([\s\S]*getVersionForOwner\([\s\S]*\},\s*async \(project\) =>/,
+  );
+  assert.match(
+    approval[0],
+    /async \(\) => \{[\s\S]*getProjectForOwner\([\s\S]*getVersionForOwner\([\s\S]*\},\s*async \(\{ project, version, runtime \}\) =>/,
+  );
+  assert.match(
+    exportRequest[0],
+    /async \(\) => \{[\s\S]*getProjectForOwner\([\s\S]*EXPORT_REQUIRES_APPROVED_VERSION[\s\S]*getVersionForOwner\([\s\S]*\},\s*async \(\{ project, versionId \}\) =>/,
+  );
+});
+
+test("revision, approval, and export replay authorize the owner before returning cache", async () => {
+  for (const toolName of [
+    "request_presentation_revision",
+    "approve_presentation",
+    "export_presentation",
+  ]) {
+    const db = new IdempotencyD1();
+    const input = { projectId: "owner-a-project", versionId: "version-1" };
+    let effects = 0;
+    await runIdempotent(
+      db,
+      "owner-a",
+      toolName,
+      "shared-resource-key-01",
+      input,
+      async () => ({ projectId: input.projectId }),
+      async () => ({ effectId: ++effects, ownerId: "owner-a" }),
+    );
+
+    let revokedAuthorizationChecks = 0;
+    let revokedActions = 0;
+    await assert.rejects(
+      runIdempotent(
+        db,
+        "owner-a",
+        toolName,
+        "shared-resource-key-01",
+        input,
+        async () => {
+          revokedAuthorizationChecks += 1;
+          throw new Error("OWNER_ACCESS_REVOKED");
+        },
+        async () => {
+          revokedActions += 1;
+          return { effectId: ++effects, ownerId: "owner-a" };
+        },
+      ),
+      /OWNER_ACCESS_REVOKED/,
+    );
+    assert.equal(revokedAuthorizationChecks, 1, toolName + " reauthorize before cache");
+    assert.equal(revokedActions, 0, toolName + " must stop after revoked authorization");
+
+    let authorizationChecks = 0;
+    let actions = 0;
+    await assert.rejects(
+      runIdempotent(
+        db,
+        "owner-b",
+        toolName,
+        "shared-resource-key-01",
+        input,
+        async () => {
+          authorizationChecks += 1;
+          throw new Error("PROJECT_NOT_FOUND_OR_NOT_OWNED");
+        },
+        async () => {
+          actions += 1;
+          return { effectId: ++effects, ownerId: "owner-b" };
+        },
+      ),
+      /PROJECT_NOT_FOUND_OR_NOT_OWNED/,
+    );
+    assert.equal(authorizationChecks, 1, toolName + " owner preflight");
+    assert.equal(actions, 0, toolName + " must not return or repeat cached effect");
+    assert.equal(effects, 1, toolName + " cached effect belongs to owner A");
+  }
 });

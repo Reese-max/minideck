@@ -1,4 +1,5 @@
 import { base64FromBytes, sha256Hex } from "./crypto";
+import { checkJudgeBoundary, runWithJudgeBoundary } from "../runner/claim-boundary.mjs";
 import type { DashiAudit, DashiJobInput, DashiJobResult, JsonObject, RunnerEnv } from "./types";
 import { shouldRunJudges } from "../runner/claim-integrity.mjs";
 import {
@@ -243,7 +244,10 @@ export async function runJudges(
   if (!result.version) return result;
   const audit = result.version.audit;
   if (!shouldRunJudges(result)) {
-    return blockedJudgeResult(env, input, result, audit, "CLAIM_INTEGRITY_FAILED");
+    return { status: "blocked", jobId: input.jobId, error: "CLAIM_INTEGRITY_FAILED" };
+  }
+  if (!checkJudgeBoundary(input, result).pass) {
+    return { status: "blocked", jobId: input.jobId, error: "CLAIM_BOUNDARY_BLOCKED" };
   }
   if (!env.CF_AI_ROUTER_URL?.trim() || !env.CF_AI_ROUTER_API_KEY?.trim()) {
     return blockedJudgeResult(env, input, result, audit, "JUDGES_NOT_CONFIGURED");
@@ -287,7 +291,7 @@ export async function runJudges(
     }
     sheetBytes.push(new Uint8Array(await object.arrayBuffer()));
   }
-  const visualCalls = sheetArtifacts.map((artifact, index) => {
+  const visualMessages = sheetArtifacts.map((artifact, index) => {
     const slideIds = expectedSheets[index]?.slideIds ?? [];
     const messages: JsonObject[] = [
       {
@@ -308,7 +312,7 @@ export async function runJudges(
         ],
       },
     ];
-    return callRouter(env, "free-vision", messages);
+    return messages;
   });
   const factualSpec = input.spec || result.version.spec;
   const factualMessages: JsonObject[] = [
@@ -325,10 +329,14 @@ export async function runJudges(
   let visual: JudgeReport;
   let factual: JudgeReport;
   try {
-    const [sheetReports, factualReport] = await Promise.all([
-      Promise.all(visualCalls),
+    const judgeCalls = await runWithJudgeBoundary(input, result, () => Promise.all([
+      Promise.all(visualMessages.map((messages) => callRouter(env, "free-vision", messages))),
       callRouter(env, env.CF_AI_ROUTER_MODEL?.trim() || "free-general", factualMessages),
-    ]);
+    ]));
+    if (!judgeCalls.allowed) {
+      return { status: "blocked", jobId: input.jobId, error: judgeCalls.reason || "CLAIM_BOUNDARY_BLOCKED" };
+    }
+    const [sheetReports, factualReport] = judgeCalls.value;
     visual = aggregateVisualReports(sheetReports);
     factual = factualReport;
   } catch (error) {
