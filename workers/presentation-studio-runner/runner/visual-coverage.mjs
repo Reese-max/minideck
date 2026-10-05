@@ -63,7 +63,9 @@ export function previewSheetRank(kind) {
 }
 
 function screenshotSortKey(name) {
-  const match = /(\d+)(?=\.png$)/i.exec(name) || /(\d+)/.exec(name);
+  // The pinned renderer suffix is a variant ID (v4), not the slide index.
+  const match = /^slide-(\d+)(?:-v\d+)?\.png$/i.exec(name)
+    || /(\d+)(?=\.png$)/i.exec(name) || /(\d+)/.exec(name);
   return match ? Number(match[1]) : Number.POSITIVE_INFINITY;
 }
 
@@ -119,6 +121,13 @@ export function planVisualCoverage(slideIds, screenshotNames) {
   const uniqueExpected = new Set(expectedSlideIds);
   const slideCount = Array.isArray(slideIds) ? slideIds.length : 0;
   const names = sortScreenshotNames(screenshotNames);
+  const dashiIndexes = names.map(name => /^slide-(\d+)-v(\d+)\.png$/i.exec(name));
+  // The pinned producer emits exactly v4 for logical indices 1..N. Counts
+  // alone must not allow another variant, a gap or an unrelated file to claim
+  // coverage of the absent slide. Preserve the legacy generic-name fallback.
+  const exactDashiIndexes = !dashiIndexes.some(Boolean) || dashiIndexes.every(
+    (match, index) => match !== null && Number(match[1]) === index + 1 && Number(match[2]) === 4,
+  );
   const expectedSheets = expectedPreviewSheets(expectedSlideIds);
   const sheets = chunk(names, PREVIEW_TILES_PER_SHEET).map(
     (fileNames, index) => ({
@@ -133,6 +142,7 @@ export function planVisualCoverage(slideIds, screenshotNames) {
     slideCount === expectedSlideIds.length &&
     slideCount === uniqueExpected.size &&
     names.length === slideCount &&
+    exactDashiIndexes &&
     sheets.every((sheet) => sheet.kind !== null);
   return {
     complete,
