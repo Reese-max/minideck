@@ -93,6 +93,36 @@ assert.deepEqual(plan100.sheets[4].slideIds, slideIds(100).slice(80));
 assert.deepEqual(plan100.sheets[4].kind, "preview-5");
 console.log("PASS visual coverage：100 張投影片上限產生五批且全部涵蓋");
 
+// The pinned renderer emits slide-01-v4.png, not slide-01.png. Bind each
+// actual screenshot to its logical slide even when variant digits are present.
+const dashiNames = screenshotNames(100).map(name => name.replace(".png", "-v4.png"));
+const permutations = [
+  dashiNames.slice().reverse(),
+  [...dashiNames.filter((_, index) => index % 2), ...dashiNames.filter((_, index) => index % 2 === 0)],
+];
+for (const names of permutations) {
+  const actualPlan = planVisualCoverage(slideIds(100), names);
+  assert.equal(actualPlan.complete, true);
+  assert.deepEqual(actualPlan.sheets.flatMap(sheet => sheet.fileNames), dashiNames,
+    "actual Dashi variant suffix must not move slide 100 before slide 11");
+  assert.deepEqual(actualPlan.sheets.flatMap(sheet => sheet.slideIds), slideIds(100));
+}
+const unpaddedDashi = screenshotNames(21, { padded: false }).map(name => name.replace(".png", "-v4.png"));
+assert.deepEqual(planVisualCoverage(slideIds(21), unpaddedDashi.slice().reverse()).sheets.flatMap(sheet => sheet.fileNames), unpaddedDashi);
+console.log("PASS visual coverage：真實 Dashi v4 檔名以 logical index 對應 21/100 張投影片");
+
+// Two variant files of slide 1 cannot substitute for the absent slide 2.
+for (const names of [
+  ["slide-01-v1.png", "slide-01-v4.png"],
+  ["slide-01-v4.png", "slide-03-v4.png"],
+  ["slide-01-v4.png", "unmapped.png"],
+]) {
+  const invalid = planVisualCoverage(slideIds(2), names);
+  assert.equal(invalid.complete, false, "actual Dashi names must prove one v4 image for every logical index");
+  assert.equal(visualCoverageSatisfied(invalid, slideIds(2), 2), false);
+}
+console.log("PASS visual coverage：重複、跳號或混入未知 Dashi 截圖一律 fail closed");
+
 // Coverage receipts must fail closed on any tampering or absence.
 const tampered = { ...plan21, evaluatedSlideIds: slideIds(21).slice(0, 20).concat(["s21"]) };
 tampered.evaluatedSlideIds[20] = "different-id";

@@ -91,7 +91,14 @@ try {
   const spec = JSON.parse(await readFile(goalPath, "utf8"));
   assert.equal(spec.slides.length, 21);
   assert.ok(spec.slides.every(slide => slide.variants.length === 4));
+  // Dashi's scaffold omits logical IDs; the platform's authored spec supplies
+  // them, as its existing scaffold bridge does. A provided goal must retain
+  // those identities before rendering and collecting visual evidence.
+  spec.slides = spec.slides.map((slide, index) => ({ ...slide, id: slides[index].id }));
   const expectedSlideIds = spec.slides.map(slide => slide.id);
+  assert.equal(new Set(expectedSlideIds).size, 21);
+  assert.deepEqual(expectedSlideIds, slides.map(slide => slide.id));
+  await writeFile(goalPath, JSON.stringify(spec));
   const input = {
     jobId: "real-21", projectId: "real-project", type: "render",
     title: spec.title, brief: spec.goal, spec,
@@ -113,6 +120,10 @@ try {
     deterministic: audit.deterministic,
     failedChecks: audit.evidence.filter(check => check.passed !== true),
   }));
+  assert.deepEqual(audit.deterministic, {
+    goalSpec: true, claimIntegrity: true, safeProps: true, render: true,
+    swiss: true, copy: true, variantQuality: true,
+  }, JSON.stringify(audit.evidence.filter(check => check.passed !== true)));
   assert.equal(coverage.complete, true);
   assert.equal(coverage.screenshotCount, 21);
   assert.equal(coverage.sheetCount, 2);
