@@ -6,7 +6,7 @@
   "description": "Cloudflare Worker scaffold for minideck",
   "scripts": {
     "dev": "wrangler dev --port 8787",
-    "test": "node --import ./test/register-loader.mjs test/security.mjs && node --import ./test/register-loader.mjs test/token-client.mjs && node --import ./test/register-loader.mjs test/storage-cleanup.mjs && node --import ./test/register-loader.mjs test/frontend.mjs && node --import ./test/register-loader.mjs test/judge-mock.mjs && node --import ./test/register-loader.mjs test/persona-historical-scope.mjs",
+    "test": "node --import ./test/register-loader.mjs test/security.mjs && node --import ./test/register-loader.mjs test/token-client.mjs && node --import ./test/register-loader.mjs test/storage-cleanup.mjs && node --import ./test/register-loader.mjs test/frontend.mjs && node --import ./test/register-loader.mjs test/judge-mock.mjs && node --import ./test/register-loader.mjs test/persona-historical-scope.mjs && node test/presentation-job-lease.mjs && node --test workers/presentation-studio-runner/test/contract.test.mjs && node --test workers/presentation-studio-mcp/test/contract.test.mjs workers/presentation-studio-mcp/test/owner-idempotency-runtime.test.mjs",
     "check": "npm run test"
   },
   "devDependencies": {

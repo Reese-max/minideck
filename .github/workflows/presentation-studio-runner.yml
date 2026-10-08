@@ -1,0 +1,101 @@
+name: Presentation Studio Runner
+
+on:
+  pull_request:
+    paths:
+      - "src/**"
+      - "test/**"
+      - "package.json"
+      - "package-lock.json"
+      - "workers/presentation-studio-runner/**"
+      - "workers/presentation-studio-mcp/src/jobs.ts"
+      - "workers/presentation-studio-mcp/src/presentation.ts"
+      - ".github/workflows/presentation-studio-runner.yml"
+  push:
+    branches: [main]
+    paths:
+      - "workers/presentation-studio-runner/**"
+      - "workers/presentation-studio-mcp/src/jobs.ts"
+      - "workers/presentation-studio-mcp/src/presentation.ts"
+      - ".github/workflows/presentation-studio-runner.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            workers/presentation-studio-runner/package-lock.json
+      - run: npm ci
+      - run: npm ci --prefix workers/presentation-studio-mcp
+      - run: npm run check
+      - run: cd workers/presentation-studio-runner && npm ci
+      - run: cd workers/presentation-studio-runner && npx --no-install wrangler types
+      - run: cd workers/presentation-studio-runner && npm run check
+      - run: cd workers/presentation-studio-runner && npx --no-install wrangler deploy --dry-run
+      - name: Dry-run the preview named environment config
+        run: cd workers/presentation-studio-runner && npx --no-install wrangler deploy --dry-run --env preview --containers-rollout=none
+      - name: Dry-run the production named environment config
+        run: cd workers/presentation-studio-runner && npx --no-install wrangler deploy --dry-run --env production --containers-rollout=none
+
+  container-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Dashi runner image
+        run: docker build --platform linux/amd64 --tag presentation-studio-runner:test workers/presentation-studio-runner
+      - name: Render and export a Dashi fixture inside the image
+        run: |
+          set -eu
+          docker run --rm --platform linux/amd64 \
+            -v "$GITHUB_WORKSPACE/workers/presentation-studio-runner/test/fixtures:/tmp/fixtures:ro" \
+            presentation-studio-runner:test \
+            /bin/sh -eu -c '
+              project=/opt/skills/dashi-ppt/project
+              work=/tmp/dashi-smoke
+              mkdir -p "$work/deck" "$work/screenshots"
+              npm --prefix "$project" run goal:scaffold -- \
+                --title "Dashi container smoke" \
+                --goal "Verify the Dashi render and export path" \
+                --theme theme07 \
+                --pages 3 \
+                --content-briefs /tmp/fixtures/content-briefs.json \
+                --layout-variants 3 \
+                --seed ci-smoke \
+                --workflow-run-id ci-smoke \
+                --out "$work/goal.json"
+              npm --prefix "$project" run validate:goal-spec -- "$work/goal.json"
+              npm --prefix "$project" run props:safe -- --goal "$work/goal.json" --write
+              npm --prefix "$project" run render:goal -- "$work/goal.json" "$work/deck/index.html"
+              node /app/runner/deck-normalizer.mjs "$work/deck/index.html"
+              npm --prefix "$project" run validate:swiss -- "$work/deck/index.html"
+              npm --prefix "$project" run validate:goal-copy -- "$work/goal.json" "$work/deck/index.html"
+              npm --prefix "$project" run validate:four-variant-quality -- \
+                --deck "$work/deck/index.html" \
+                --goal "$work/goal.json" \
+                --out "$work/quality.json" \
+                --screenshots "$work/screenshots"
+              npm --prefix "$project" run export:pptx -- "$work/deck" "$work/deck.pptx"
+              npm --prefix "$project" run export:pdf -- "$work/deck" "$work/deck.pdf"
+              test -s "$work/deck/index.html"
+              test -s "$work/deck.pptx"
+              test -s "$work/deck.pdf"
+            '
+
+      - name: Render all 21 slides and verify production contact-sheet coverage
+        run: |
+          docker run --rm --network none --platform linux/amd64 \
+            -v "$GITHUB_WORKSPACE/workers/presentation-studio-runner/acceptance:/tmp/acceptance:ro" \
+            -v "$GITHUB_WORKSPACE/workers/presentation-studio-runner/test/fixtures:/tmp/fixtures:ro" \
+            -e MINIDECK_CONTENT_BRIEFS=/tmp/fixtures/content-briefs.json \
+            -e MINIDECK_RUNNER_MODULE=/app/runner/execute-job.mjs \
+            presentation-studio-runner:test \
+            node /tmp/acceptance/visual-render.mjs

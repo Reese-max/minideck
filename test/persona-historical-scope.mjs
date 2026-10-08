@@ -16,22 +16,29 @@ function createD1() {
   return {
     prepare(sql) {
       let bound = [];
+      // D1 accepts numbered placeholders (?N) bound positionally; node:sqlite
+      // only binds anonymous (?) parameters. Translate ?N → ? and map every
+      // occurrence (in any order, repeats included) to bound[N-1].
+      const paramIndexes = [...sql.matchAll(/\?(\d+)/g)].map((m) => Number(m[1]));
+      const normalized = paramIndexes.length ? sql.replace(/\?\d+/g, "?") : sql;
+      const positional = () =>
+        paramIndexes.length ? paramIndexes.map((i) => bound[i - 1]) : bound;
       return {
         bind(...args) {
           bound = args;
           return this;
         },
         async first() {
-          const stmt = db.prepare(sql);
-          return stmt.get(...bound) ?? null;
+          const stmt = db.prepare(normalized);
+          return stmt.get(...positional()) ?? null;
         },
         async all() {
-          const stmt = db.prepare(sql);
-          return { results: stmt.all(...bound) };
+          const stmt = db.prepare(normalized);
+          return { results: stmt.all(...positional()) };
         },
         async run() {
-          const stmt = db.prepare(sql);
-          const info = stmt.run(...bound);
+          const stmt = db.prepare(normalized);
+          const info = stmt.run(...positional());
           return { meta: { changes: Number(info.changes) } };
         },
       };
@@ -107,8 +114,25 @@ const assets = {
   },
 };
 
+const mockDb = createD1();
+
+// Regression: D1 mock binder contract — every src/ query uses numbered ?N
+// placeholders, which node:sqlite cannot bind positionally (SQLITE_RANGE).
+// The mock must map each ?N occurrence — out of order and repeated — to
+// bound[N-1]. Covers guard.js upsert WHERE ?3 and store.js SELECT ?1 … ?1.
+{
+  const probe = mockDb.prepare(
+    "SELECT ?2 AS second_col, ?1 AS first_col, ?2 AS second_again",
+  );
+  const row = await probe.bind("alpha", "beta").first();
+  assert.equal(row.second_col, "beta");
+  assert.equal(row.first_col, "alpha");
+  assert.equal(row.second_again, "beta");
+  console.log("PASS D1 mock ?N 依索引綁定（亂序與重複佔位符正確對應 bind 參數）");
+}
+
 const mockEnv = {
-  DB: createD1(),
+  DB: mockDb,
   BUCKET: createBucket(),
   ASSETS: assets,
   IP_SALT: "test-salt-12345",
