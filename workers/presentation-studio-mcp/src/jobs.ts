@@ -7,8 +7,10 @@ import { randomId } from "./ids";
 import type { Env, JobRow, JsonObject } from "./types";
 import {
   CLAIM_QUEUED_JOB_SQL,
+  JOB_ATTEMPT_HORIZONS_SECONDS,
   JOB_COMPLETION_GUARD_SQL,
   JOB_LEASE_NOT_CURRENT,
+  RENEW_JOB_LEASE_SQL,
   recoverExpiredJobLeases,
   runJobCompletion,
 } from "./job-lease.mjs";
@@ -655,6 +657,42 @@ async function completeTerminalJob(
   );
 }
 
+async function renewJobLease(request: Request, env: Env): Promise<Response> {
+  const body = await readJson(request);
+  const jobId = body?.jobId;
+  const attemptCount = body?.attemptCount;
+  if (
+    !body || Object.keys(body).some((key) => key !== "jobId" && key !== "attemptCount") ||
+    !isUuid(jobId) || typeof attemptCount !== "number" ||
+    !Number.isInteger(attemptCount) || attemptCount < 1
+  ) {
+    return jsonResponse({ error: "invalid_renew_request" }, 400);
+  }
+  const job = await env.DB.prepare("SELECT * FROM presentation_jobs WHERE id = ?")
+    .bind(jobId).first<JobRow>();
+  if (!job) return jsonResponse({ error: "job_not_found" }, 404);
+  if (job.status !== "running" || job.attempt_count !== attemptCount) {
+    return jsonResponse({ error: JOB_LEASE_NOT_CURRENT }, 409);
+  }
+  const horizon = Object.hasOwn(JOB_ATTEMPT_HORIZONS_SECONDS, job.job_type)
+    ? JOB_ATTEMPT_HORIZONS_SECONDS[job.job_type as keyof typeof JOB_ATTEMPT_HORIZONS_SECONDS]
+    : undefined;
+  // The SQL CAS uses its own clock after validating the exact persisted spellings.
+  if (!horizon || !Number.isFinite(parseUtcDate(job.leased_until)) ||
+    !Number.isFinite(parseUtcDate(job.started_at))) {
+    return jsonResponse({ error: JOB_LEASE_NOT_CURRENT }, 409);
+  }
+  const modifier = `+${horizon} seconds`;
+  const renewed = await env.DB.prepare(RENEW_JOB_LEASE_SQL)
+    .bind(modifier, jobId, attemptCount, job.leased_until, job.started_at, modifier)
+    .first<{ id: string; attempt_count: number; leased_until: string; lease_seconds: number }>();
+  if (!renewed) return jsonResponse({ error: JOB_LEASE_NOT_CURRENT }, 409);
+  return jsonResponse({
+    status: "renewed", jobId: renewed.id, attemptCount: renewed.attempt_count,
+    leasedUntil: renewed.leased_until, leaseSeconds: renewed.lease_seconds,
+  });
+}
+
 async function completeJob(request: Request, env: Env): Promise<Response> {
   const body = await readJson(request);
   if (!body) return jsonResponse({ error: "invalid_complete_request" }, 400);
@@ -742,6 +780,9 @@ export async function handleJobApi(
   }
   if (url.pathname === "/internal/jobs/complete" && request.method === "POST") {
     return completeJob(request, env);
+  }
+  if (url.pathname === "/internal/jobs/renew" && request.method === "POST") {
+    return renewJobLease(request, env);
   }
   return jsonResponse({ error: "not_found" }, 404);
 }

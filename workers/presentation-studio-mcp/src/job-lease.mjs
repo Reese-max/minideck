@@ -1,5 +1,25 @@
 export const JOB_LEASE_NOT_CURRENT = "job_lease_not_current";
 
+// The original dispatch window plus each existing Workflow retry/timeout budget.
+// A renewal never resets started_at or gives an attempt an unlimited lifetime.
+export const JOB_ATTEMPT_HORIZONS_SECONDS = Object.freeze({
+  plan: 13310,
+  render: 20690,
+  revision: 22580,
+  export: 20690,
+});
+
+export const RENEW_JOB_LEASE_SQL =
+  "UPDATE presentation_jobs SET " +
+    "leased_until = min(datetime('now', '+60 minutes'), datetime(started_at, ?)), " +
+    "updated_at = datetime('now') " +
+    "WHERE id = ? AND status = 'running' AND attempt_count = ? " +
+    "AND leased_until = ? AND started_at = ? " +
+    "AND leased_until > datetime('now') AND started_at <= datetime('now') " +
+    "AND datetime(started_at, ?) > datetime('now') " +
+    "RETURNING id, attempt_count, leased_until, " +
+    "CAST(strftime('%s', leased_until) - strftime('%s', 'now') AS INTEGER) AS lease_seconds";
+
 export const CLAIM_QUEUED_JOB_SQL =
   "UPDATE presentation_jobs SET status = 'running', attempt_count = attempt_count + 1, " +
     "leased_until = datetime('now', '+60 minutes'), started_at = COALESCE(started_at, datetime('now')), " +
