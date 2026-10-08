@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { registerHooks } from "node:module";
 import { test } from "node:test";
@@ -340,5 +341,194 @@ test("revision, approval, and export replay authorize the owner before returning
     assert.equal(authorizationChecks, 1, toolName + " owner preflight");
     assert.equal(actions, 0, toolName + " must not return or repeat cached effect");
     assert.equal(effects, 1, toolName + " cached effect belongs to owner A");
+  }
+});
+
+test("accepts valid +60 min lease completion in non-UTC timezone (Asia/Taipei) and UTC control", async () => {
+  const jobsUrl = new URL("../src/jobs.ts", import.meta.url).href;
+
+  function runLeaseCompletionHarness(tz) {
+    const script = `
+import assert from "node:assert/strict";
+import { registerHooks } from "node:module";
+import { DatabaseSync } from "node:sqlite";
+
+registerHooks({
+  resolve(specifier, context, next) {
+    return next(
+      specifier.startsWith(".") && !/\\.[cm]?[jt]s$/.test(specifier)
+        ? specifier + ".ts"
+        : specifier,
+      context,
+    );
+  },
+});
+
+const { handleJobApi } = await import(${JSON.stringify(jobsUrl)});
+
+class D1 {
+  constructor(database) { this.database = database; }
+  prepare(sql) {
+    const database = this.database;
+    let values = [];
+    return {
+      bind(...args) { values = args; return this; },
+      async first() { return database.prepare(sql).get(...values) ?? null; },
+      async run() {
+        const info = database.prepare(sql).run(...values);
+        return { meta: { changes: Number(info.changes) } };
+      },
+    };
+  }
+  async batch(statements) {
+    this.database.exec("BEGIN");
+    try {
+      const results = [];
+      for (const statement of statements) results.push(await statement.run());
+      this.database.exec("COMMIT");
+      return results;
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+}
+
+function createEnv(db) {
+  return {
+    DB: new D1(db),
+    PRESENTATION_RUNNER_TOKEN: "test-runner-token",
+    BUCKET: {
+      async head() { return { size: 10 }; },
+      async put() {},
+      async delete() {},
+    },
+  };
+}
+
+function initDb() {
+  const db = new DatabaseSync(":memory:");
+  db.exec(\`
+    CREATE TABLE presentation_projects (id TEXT PRIMARY KEY, title TEXT, brief TEXT, profile_id TEXT, renderer TEXT, status TEXT, target_score INTEGER, max_rounds INTEGER, source_summary TEXT, current_round INTEGER DEFAULT 0, current_score INTEGER, approved_version_id TEXT, updated_at TEXT);
+    CREATE TABLE presentation_project_runtime (project_id TEXT PRIMARY KEY, last_error TEXT, blocked_reason TEXT, updated_at TEXT);
+    CREATE TABLE presentation_events (id TEXT PRIMARY KEY, project_id TEXT, event_type TEXT, payload_json TEXT);
+    CREATE TABLE presentation_versions (id TEXT PRIMARY KEY, project_id TEXT, version_number INTEGER, spec_json TEXT, audit_json TEXT, score INTEGER, hard_gates_pass INTEGER DEFAULT 0, origin TEXT, UNIQUE(project_id, version_number));
+    CREATE TABLE presentation_version_runtime (version_id TEXT PRIMARY KEY, parent_version_id TEXT, changed_slides_json TEXT, renderer_report_json TEXT, export_report_json TEXT, r2_prefix TEXT, is_approved INTEGER DEFAULT 0);
+    CREATE TABLE presentation_artifacts (id TEXT PRIMARY KEY, project_id TEXT, version_id TEXT, kind TEXT, r2_key TEXT, mime_type TEXT, byte_size INTEGER, sha256 TEXT, expires_at TEXT);
+    CREATE TABLE presentation_jobs (
+      id TEXT PRIMARY KEY, project_id TEXT, job_type TEXT, status TEXT, payload_json TEXT,
+      attempt_count INTEGER, max_attempts INTEGER, leased_until TEXT, last_error TEXT,
+      finished_at TEXT, updated_at TEXT
+    );
+  \`);
+  return db;
+}
+
+// Case 1: complete failed job with +60 min lease
+const dbFailed = initDb();
+dbFailed.exec(\`
+  INSERT INTO presentation_projects (id, status, updated_at) VALUES ('11111111-1111-1111-1111-111111111111', 'queued', datetime('now'));
+  INSERT INTO presentation_project_runtime (project_id) VALUES ('11111111-1111-1111-1111-111111111111');
+  INSERT INTO presentation_jobs (id, project_id, job_type, status, payload_json, attempt_count, max_attempts, leased_until)
+  VALUES ('22222222-2222-2222-2222-222222222222','11111111-1111-1111-1111-111111111111','render','running','{}',1,3,datetime('now','+60 minutes'));
+\`);
+const resFailed = await handleJobApi(new Request("https://mcp.test/internal/jobs/complete", {
+  method: "POST",
+  headers: { authorization: "Bearer test-runner-token" },
+  body: JSON.stringify({
+    jobId: "22222222-2222-2222-2222-222222222222",
+    attemptCount: 1,
+    status: "failed",
+    error: "repro",
+  }),
+}), createEnv(dbFailed));
+const failedBody = await resFailed.json();
+const failedJob = dbFailed.prepare("SELECT status, last_error FROM presentation_jobs WHERE id = ?").get("22222222-2222-2222-2222-222222222222");
+
+// Case 2: complete succeeded job with +60 min lease
+const dbSucceeded = initDb();
+dbSucceeded.exec(\`
+  INSERT INTO presentation_projects (id, status, updated_at) VALUES ('11111111-1111-1111-1111-111111111111', 'queued', datetime('now'));
+  INSERT INTO presentation_project_runtime (project_id) VALUES ('11111111-1111-1111-1111-111111111111');
+  INSERT INTO presentation_jobs (id, project_id, job_type, status, payload_json, attempt_count, max_attempts, leased_until)
+  VALUES ('33333333-3333-3333-3333-333333333333','11111111-1111-1111-1111-111111111111','render','running','{}',1,3,datetime('now','+60 minutes'));
+\`);
+const resSucceeded = await handleJobApi(new Request("https://mcp.test/internal/jobs/complete", {
+  method: "POST",
+  headers: { authorization: "Bearer test-runner-token" },
+  body: JSON.stringify({
+    jobId: "33333333-3333-3333-3333-333333333333",
+    attemptCount: 1,
+    status: "succeeded",
+    version: {
+      spec: { slides: [] },
+      audit: {},
+      score: 90,
+      hardGatesPass: true,
+      changedSlides: [],
+    },
+    artifacts: [],
+  }),
+}), createEnv(dbSucceeded));
+const succeededBody = await resSucceeded.json();
+const succeededJob = dbSucceeded.prepare("SELECT status, last_error FROM presentation_jobs WHERE id = ?").get("33333333-3333-3333-3333-333333333333");
+
+// Case 3: complete genuinely expired job (-1 min)
+const dbExpired = initDb();
+dbExpired.exec(\`
+  INSERT INTO presentation_projects (id, status, updated_at) VALUES ('11111111-1111-1111-1111-111111111111', 'queued', datetime('now'));
+  INSERT INTO presentation_project_runtime (project_id) VALUES ('11111111-1111-1111-1111-111111111111');
+  INSERT INTO presentation_jobs (id, project_id, job_type, status, payload_json, attempt_count, max_attempts, leased_until)
+  VALUES ('44444444-4444-4444-4444-444444444444','11111111-1111-1111-1111-111111111111','render','running','{}',1,3,datetime('now','-1 minute'));
+\`);
+const resExpired = await handleJobApi(new Request("https://mcp.test/internal/jobs/complete", {
+  method: "POST",
+  headers: { authorization: "Bearer test-runner-token" },
+  body: JSON.stringify({
+    jobId: "44444444-4444-4444-4444-444444444444",
+    attemptCount: 1,
+    status: "failed",
+    error: "should_expire",
+  }),
+}), createEnv(dbExpired));
+const expiredBody = await resExpired.json();
+const expiredJob = dbExpired.prepare("SELECT status, last_error FROM presentation_jobs WHERE id = ?").get("44444444-4444-4444-4444-444444444444");
+
+console.log(JSON.stringify({
+  failedStatus: resFailed.status,
+  failedBody,
+  failedJob,
+  succeededStatus: resSucceeded.status,
+  succeededBody,
+  succeededJob,
+  expiredStatus: resExpired.status,
+  expiredBody,
+  expiredJob,
+}));
+`;
+
+    const child = spawnSync(process.execPath, ["--input-type=module", "-"], {
+      input: script,
+      env: { ...process.env, TZ: tz },
+      encoding: "utf8",
+    });
+    assert.equal(child.status, 0, `Subprocess with TZ=${tz} failed: ${child.stderr || child.stdout}`);
+    return JSON.parse(child.stdout);
+  }
+
+  for (const tz of ["Asia/Taipei", "UTC"]) {
+    const result = runLeaseCompletionHarness(tz);
+    assert.equal(result.failedStatus, 200, `failed completion in ${tz} must return HTTP 200`);
+    assert.equal(result.failedBody.status, "failed");
+    assert.equal(result.failedJob.status, "failed");
+    assert.equal(result.failedJob.last_error, "repro");
+
+    assert.equal(result.succeededStatus, 200, `succeeded completion in ${tz} must return HTTP 200`);
+    assert.equal(result.succeededBody.status, "succeeded");
+    assert.equal(result.succeededJob.status, "succeeded");
+
+    assert.equal(result.expiredStatus, 409, `expired lease in ${tz} must return HTTP 409`);
+    assert.equal(result.expiredBody.error, "job_lease_expired");
+    assert.equal(result.expiredJob.status, "running");
   }
 });

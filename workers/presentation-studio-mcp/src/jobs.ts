@@ -78,6 +78,14 @@ function isUuid(value: unknown): value is string {
   return typeof value === "string" && /^[0-9a-f-]{36}$/i.test(value);
 }
 
+export function parseUtcDate(value: string): number {
+  const trimmed = value.trim();
+  if (trimmed.endsWith("Z") || /[+-]\d{2}:?\d{2}$/.test(trimmed)) {
+    return new Date(trimmed).getTime();
+  }
+  return new Date(trimmed.replace(" ", "T") + "Z").getTime();
+}
+
 function jobPayload(job: JobRow): JsonObject {
   return parseJson<JsonObject>(job.payload_json, {});
 }
@@ -670,9 +678,11 @@ async function completeJob(request: Request, env: Env): Promise<Response> {
   if (job.status !== "running") {
     return jsonResponse({ error: "job_not_running", status: job.status }, 409);
   }
+  const leaseExpiresAt = job.leased_until ? parseUtcDate(job.leased_until) : NaN;
   if (
     !job.leased_until ||
-    new Date(job.leased_until).getTime() <= Date.now()
+    !Number.isFinite(leaseExpiresAt) ||
+    leaseExpiresAt <= Date.now()
   ) {
     return jsonResponse({ error: "job_lease_expired" }, 409);
   }
