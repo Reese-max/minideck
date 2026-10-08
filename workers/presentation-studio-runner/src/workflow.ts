@@ -1,7 +1,7 @@
 import { WorkflowEntrypoint } from "cloudflare:workers";
 import type { WorkflowEvent, WorkflowStep } from "cloudflare:workers";
 import { getContainer } from "@cloudflare/containers";
-import { completeFailure, completeJob } from "./mcp-service";
+import { completeFailure, completeJob, renewJob } from "./mcp-service";
 import { loadJobInput } from "./input";
 import { DashiContainer } from "./container";
 import { runJudges } from "./judges";
@@ -30,16 +30,23 @@ export class PresentationWorkflow extends WorkflowEntrypoint<RunnerEnv, Workflow
         result = (await step.do(
           `plan presentation job ${job.id}`,
           { retries: RETRIES, timeout: "10 minutes" },
-          async () => runPlanner(this.env, job) as any,
+          async () => {
+            await renewJob(this.env, job, 600);
+            return runPlanner(this.env, job) as any;
+          },
         )) as DashiJobResult;
-        return step.do(`complete planned job ${job.id}`, async () => {
+        return await step.do(`complete planned job ${job.id}`, async () => {
+          await renewJob(this.env, job, 600);
           return completeJob(this.env, job, result!) as any;
         });
       }
       let input = (await step.do(
         `load dashi job ${job.id}`,
         { retries: RETRIES, timeout: "5 minutes" },
-        async () => loadJobInput(this.env, job) as any,
+        async () => {
+          await renewJob(this.env, job, 300);
+          return loadJobInput(this.env, job) as any;
+        },
       )) as DashiJobInput;
       const initialBoundary = checkClaimBoundary(input.spec, input.sourceMap, [
         input.profile,
@@ -68,7 +75,10 @@ export class PresentationWorkflow extends WorkflowEntrypoint<RunnerEnv, Workflow
           const revisionPlan = await step.do(
             `plan revision for job ${job.id}`,
             { retries: RETRIES, timeout: "10 minutes" },
-            async () => runRevisionPlanner(this.env, input) as any,
+            async () => {
+              await renewJob(this.env, job, 600);
+              return runRevisionPlanner(this.env, input) as any;
+            },
           ) as Awaited<ReturnType<typeof runRevisionPlanner>>;
           if (revisionPlan.status !== "succeeded" || !revisionPlan.specPatch) {
             result = {
@@ -108,6 +118,7 @@ export class PresentationWorkflow extends WorkflowEntrypoint<RunnerEnv, Workflow
           `execute dashi job ${job.id}`,
           { retries: RETRIES, timeout: "35 minutes" },
           async () => {
+            await renewJob(this.env, job, 2100);
             const container = getContainer<DashiContainer>(
               this.env.DASHI_CONTAINER,
               `presentation-job-${job.id}-attempt-${job.attemptCount}`,
@@ -132,7 +143,10 @@ export class PresentationWorkflow extends WorkflowEntrypoint<RunnerEnv, Workflow
               (await step.do(
                 `judge dashi job ${job.id}`,
                 { retries: RETRIES, timeout: "10 minutes" },
-                async () => runJudges(this.env, executionInput, rendererResult) as any,
+                async () => {
+                  await renewJob(this.env, job, 600);
+                  return runJudges(this.env, executionInput, rendererResult) as any;
+                },
               )) as DashiJobResult,
           );
           result = judged ?? {
@@ -142,14 +156,25 @@ export class PresentationWorkflow extends WorkflowEntrypoint<RunnerEnv, Workflow
           };
         }
       }
-    } catch (error) {
-      return step.do(`record failed job ${job.id}`, async () => {
-        return completeFailure(this.env, job, error) as any;
+      return await step.do(`complete dashi job ${job.id}`, async () => {
+        await renewJob(this.env, job, 600);
+        return completeJob(this.env, job, result!) as any;
       });
+    } catch (error) {
+      if (error instanceof Error && error.message === "job_lease_not_current") {
+        return { error: "job_lease_not_current", jobId: job.id };
+      }
+      try {
+        return await step.do(`record failed job ${job.id}`, async () => {
+          await renewJob(this.env, job, 600);
+          return completeFailure(this.env, job, error) as any;
+        });
+      } catch (failureError) {
+        if (failureError instanceof Error && failureError.message === "job_lease_not_current") {
+          return { error: "job_lease_not_current", jobId: job.id };
+        }
+        throw failureError;
+      }
     }
-
-    return step.do(`complete dashi job ${job.id}`, async () => {
-      return completeJob(this.env, job, result!) as any;
-    });
   }
 }

@@ -74,6 +74,32 @@ export async function claimJobs(
   });
 }
 
+export async function renewJob(
+  env: RunnerEnv,
+  job: ClaimedJob,
+  minimumSeconds: number,
+): Promise<void> {
+  if (!Number.isInteger(minimumSeconds) || minimumSeconds < 1 || minimumSeconds > 3600) {
+    throw new Error("MCP_SERVICE_INVALID_RENEWAL_WINDOW");
+  }
+  const requestedAt = performance.now();
+  const body = await callMcpService(env, "/internal/jobs/renew", {
+    jobId: job.id,
+    attemptCount: job.attemptCount,
+  });
+  if (typeof body.error === "string" && TERMINAL_JOB_ERRORS.has(body.error)) {
+    throw new Error("job_lease_not_current");
+  }
+  if (body.status !== "renewed" || body.jobId !== job.id ||
+    body.attemptCount !== job.attemptCount || typeof body.leaseSeconds !== "number" ||
+    !Number.isInteger(body.leaseSeconds) || body.leaseSeconds <= 0 || body.leaseSeconds > 3600) {
+    throw new Error("MCP_SERVICE_INVALID_RENEWAL");
+  }
+  // A final bounded horizon cannot admit a callback longer than its remaining lease.
+  const requestSeconds = Math.ceil((performance.now() - requestedAt) / 1000);
+  if (body.leaseSeconds - requestSeconds < minimumSeconds) throw new Error("job_lease_not_current");
+}
+
 export async function completeJob(
   env: RunnerEnv,
   job: ClaimedJob,
