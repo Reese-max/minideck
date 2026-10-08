@@ -16,6 +16,7 @@ jobs:
           node-version: "22"
           cache: npm
       - run: npm ci
+      - run: npm ci --prefix workers/presentation-studio-mcp
       - run: npm run check
 
   deploy-preview:
