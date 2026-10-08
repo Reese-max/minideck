@@ -6,7 +6,7 @@ const EXEC_TIMEOUT_MS = 30 * 60 * 1000;
 
 export class DashiContainer extends Container<RunnerEnv> {
   defaultPort = 8080;
-  sleepAfter = "10m";
+  sleepAfter = "35m";
   envVars = {
     NODE_ENV: "production",
     CHROME_PATH: "/usr/bin/chromium",
@@ -15,6 +15,8 @@ export class DashiContainer extends Container<RunnerEnv> {
 
   async runJob(input: DashiJobInput): Promise<DashiJobResult> {
     if (!this.ctx.container?.running) await this.start();
+    // Raw exec does not update the SDK's activity timer, including on retries.
+    this.renewActivityTimeout();
     const stdin = new ReadableStream<Uint8Array>({
       start(controller) {
         controller.enqueue(new TextEncoder().encode(JSON.stringify(input)));

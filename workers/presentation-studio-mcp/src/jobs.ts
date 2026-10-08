@@ -5,6 +5,13 @@ import {
 import { parseJson } from "./db";
 import { randomId } from "./ids";
 import type { Env, JobRow, JsonObject } from "./types";
+import {
+  CLAIM_QUEUED_JOB_SQL,
+  JOB_COMPLETION_GUARD_SQL,
+  JOB_LEASE_NOT_CURRENT,
+  recoverExpiredJobLeases,
+  runJobCompletion,
+} from "./job-lease.mjs";
 
 const JOB_TYPES = ["plan", "render", "revision", "export"] as const;
 const MAX_RESULT_BYTES = 5 * 1024 * 1024;
@@ -111,6 +118,8 @@ async function claimJobs(request: Request, env: Env): Promise<Response> {
     return jsonResponse({ error: "invalid_claim_request" }, 400);
   }
 
+  await recoverExpiredJobLeases(env.DB, randomId);
+
   const typeClause =
     requestedTypes.length > 0
       ? " AND job_type IN (" + requestedTypes.map(() => "?").join(",") + ")"
@@ -129,14 +138,8 @@ async function claimJobs(request: Request, env: Env): Promise<Response> {
 
   const claimedIds: string[] = [];
   for (const job of query.results) {
-    const update = await env.DB.prepare(
-      "UPDATE presentation_jobs SET status = 'running', attempt_count = attempt_count + 1, " +
-        "leased_until = datetime('now', '+60 minutes'), started_at = COALESCE(started_at, datetime('now')), " +
-        "updated_at = datetime('now') " +
-        "WHERE id = ? AND status = 'queued' " +
-        "AND (leased_until IS NULL OR leased_until <= datetime('now'))",
-    )
-      .bind(job.id)
+    const update = await env.DB.prepare(CLAIM_QUEUED_JOB_SQL)
+      .bind(job.id, job.attempt_count)
       .run();
     if (update.meta.changes === 1) claimedIds.push(job.id);
   }
@@ -287,74 +290,94 @@ async function completeRenderJob(
       });
     }
   }
-  await env.DB.batch([
-    env.DB.prepare(
-      "INSERT INTO presentation_versions " +
-        "(id, project_id, version_number, spec_json, audit_json, score, hard_gates_pass, origin) " +
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-    ).bind(
-      versionId,
-      job.project_id,
-      versionNumber,
-      JSON.stringify(versionInput.spec),
-      JSON.stringify(versionInput.audit),
-      versionInput.score,
-      versionInput.hardGatesPass ? 1 : 0,
-      versionInput.origin,
-    ),
-    env.DB.prepare(
-      "INSERT INTO presentation_version_runtime " +
-        "(version_id, parent_version_id, changed_slides_json, renderer_report_json, r2_prefix) " +
-        "VALUES (?, ?, ?, ?, ?)",
-    ).bind(
-      versionId,
-      versionInput.parentVersionId,
-      changedSlidesJson,
-      runtimeReport ? JSON.stringify(runtimeReport) : null,
-      r2Prefix,
-    ),
-    ...artifactRows.map((artifact) =>
+  await runJobCompletion(
+    env.DB,
+    job,
+    [
       env.DB.prepare(
-        "INSERT INTO presentation_artifacts " +
-          "(id, project_id, version_id, kind, r2_key, mime_type, byte_size, sha256) " +
-          "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO presentation_versions " +
+          "(id, project_id, version_number, spec_json, audit_json, score, hard_gates_pass, origin) " +
+          "SELECT ?, ?, ?, ?, ?, ?, ?, ? WHERE " + JOB_COMPLETION_GUARD_SQL,
       ).bind(
-        artifact.id,
-        job.project_id,
         versionId,
-        artifact.kind,
-        artifact.key,
-        artifact.mimeType,
-        artifact.size,
-        artifact.sha256,
+        job.project_id,
+        versionNumber,
+        JSON.stringify(versionInput.spec),
+        JSON.stringify(versionInput.audit),
+        versionInput.score,
+        versionInput.hardGatesPass ? 1 : 0,
+        versionInput.origin,
+        job.id,
+        job.attempt_count,
       ),
-    ),
+      env.DB.prepare(
+        "INSERT INTO presentation_version_runtime " +
+          "(version_id, parent_version_id, changed_slides_json, renderer_report_json, r2_prefix) " +
+          "SELECT ?, ?, ?, ?, ? WHERE " + JOB_COMPLETION_GUARD_SQL,
+      ).bind(
+        versionId,
+        versionInput.parentVersionId,
+        changedSlidesJson,
+        runtimeReport ? JSON.stringify(runtimeReport) : null,
+        r2Prefix,
+        job.id,
+        job.attempt_count,
+      ),
+      ...artifactRows.map((artifact) =>
+        env.DB.prepare(
+          "INSERT INTO presentation_artifacts " +
+            "(id, project_id, version_id, kind, r2_key, mime_type, byte_size, sha256) " +
+            "SELECT ?, ?, ?, ?, ?, ?, ?, ? WHERE " + JOB_COMPLETION_GUARD_SQL,
+        ).bind(
+          artifact.id,
+          job.project_id,
+          versionId,
+          artifact.kind,
+          artifact.key,
+          artifact.mimeType,
+          artifact.size,
+          artifact.sha256,
+          job.id,
+          job.attempt_count,
+        ),
+      ),
+      env.DB.prepare(
+        "UPDATE presentation_projects SET status = 'review', current_round = current_round + ?, " +
+          "current_score = ?, updated_at = datetime('now') WHERE id = ? AND " +
+          JOB_COMPLETION_GUARD_SQL,
+      ).bind(
+        job.job_type === "revision" ? 1 : 0,
+        versionInput.score,
+        job.project_id,
+        job.id,
+        job.attempt_count,
+      ),
+      env.DB.prepare(
+        "INSERT INTO presentation_events " +
+          "(id, project_id, event_type, payload_json) " +
+          "SELECT ?, ?, 'job.completed', ? WHERE " + JOB_COMPLETION_GUARD_SQL,
+      ).bind(
+        randomId(),
+        job.project_id,
+        JSON.stringify({
+          jobId: job.id,
+          jobType: job.job_type,
+          versionId,
+          versionNumber,
+          artifactCount: artifactRows.length,
+          hardGatesPass: versionInput.hardGatesPass,
+          score: versionInput.score,
+        }),
+        job.id,
+        job.attempt_count,
+      ),
+    ],
     env.DB.prepare(
       "UPDATE presentation_jobs SET status = 'succeeded', leased_until = NULL, " +
         "finished_at = datetime('now'), updated_at = datetime('now'), last_error = NULL " +
-        "WHERE id = ? AND status = 'running'",
-    ).bind(job.id),
-    env.DB.prepare(
-      "UPDATE presentation_projects SET status = 'review', current_round = current_round + ?, " +
-        "current_score = ?, updated_at = datetime('now') WHERE id = ?",
-    ).bind(job.job_type === "revision" ? 1 : 0, versionInput.score, job.project_id),
-    env.DB.prepare(
-      "INSERT INTO presentation_events " +
-        "(id, project_id, event_type, payload_json) VALUES (?, ?, 'job.completed', ?)",
-    ).bind(
-      randomId(),
-      job.project_id,
-      JSON.stringify({
-        jobId: job.id,
-        jobType: job.job_type,
-        versionId,
-        versionNumber,
-        artifactCount: artifactRows.length,
-        hardGatesPass: versionInput.hardGatesPass,
-        score: versionInput.score,
-      }),
-    ),
-  ]);
+        "WHERE id = ? AND status = 'running' AND attempt_count = ?",
+    ).bind(job.id, job.attempt_count),
+  );
   return { versionId, versionNumber };
 }
 
@@ -398,50 +421,59 @@ async function completePlanJob(
   const versionNumber = (maxVersion?.version_number || 0) + 1;
   const versionId = randomId();
   const renderJobId = randomId();
-  await env.DB.batch([
-    env.DB.prepare(
-      "INSERT INTO presentation_versions " +
-        "(id, project_id, version_number, spec_json, origin) " +
-        "VALUES (?, ?, ?, ?, 'planner-fallback')",
-    ).bind(versionId, job.project_id, versionNumber, JSON.stringify(spec)),
-    env.DB.prepare(
-      "INSERT INTO presentation_version_runtime " +
-        "(version_id, parent_version_id, changed_slides_json, r2_prefix) " +
-        "VALUES (?, NULL, '[]', ?)",
-    ).bind(versionId, projectPrefix(env, job.project_id)),
+  await runJobCompletion(
+    env.DB,
+    job,
+    [
+      env.DB.prepare(
+        "INSERT INTO presentation_versions " +
+          "(id, project_id, version_number, spec_json, origin) " +
+          "SELECT ?, ?, ?, ?, 'planner-fallback' WHERE " + JOB_COMPLETION_GUARD_SQL,
+      ).bind(versionId, job.project_id, versionNumber, JSON.stringify(spec), job.id, job.attempt_count),
+      env.DB.prepare(
+        "INSERT INTO presentation_version_runtime " +
+          "(version_id, parent_version_id, changed_slides_json, r2_prefix) " +
+          "SELECT ?, NULL, '[]', ? WHERE " + JOB_COMPLETION_GUARD_SQL,
+      ).bind(versionId, projectPrefix(env, job.project_id), job.id, job.attempt_count),
+      env.DB.prepare(
+        "INSERT INTO presentation_jobs " +
+          "(id, project_id, job_type, status, payload_json, max_attempts) " +
+          "SELECT ?, ?, 'render', 'queued', ?, 3 WHERE " + JOB_COMPLETION_GUARD_SQL,
+      ).bind(
+        renderJobId,
+        job.project_id,
+        JSON.stringify({
+          mode: "validate-and-render",
+          profileId,
+          parentVersionId: versionId,
+          requestedFormats: payload.requestedFormats || ["pptx"],
+          plannedFromJobId: job.id,
+        }),
+        job.id,
+        job.attempt_count,
+      ),
+      env.DB.prepare(
+        "UPDATE presentation_projects SET status = 'queued', updated_at = datetime('now') " +
+          "WHERE id = ? AND " + JOB_COMPLETION_GUARD_SQL,
+      ).bind(job.project_id, job.id, job.attempt_count),
+      env.DB.prepare(
+        "INSERT INTO presentation_events " +
+          "(id, project_id, event_type, payload_json) " +
+          "SELECT ?, ?, 'plan.completed', ? WHERE " + JOB_COMPLETION_GUARD_SQL,
+      ).bind(
+        randomId(),
+        job.project_id,
+        JSON.stringify({ jobId: job.id, versionId, renderJobId }),
+        job.id,
+        job.attempt_count,
+      ),
+    ],
     env.DB.prepare(
       "UPDATE presentation_jobs SET status = 'succeeded', leased_until = NULL, " +
         "finished_at = datetime('now'), updated_at = datetime('now'), last_error = NULL " +
-        "WHERE id = ? AND status = 'running'",
-    ).bind(job.id),
-    env.DB.prepare(
-      "INSERT INTO presentation_jobs " +
-        "(id, project_id, job_type, status, payload_json, max_attempts) " +
-        "VALUES (?, ?, 'render', 'queued', ?, 3)",
-    ).bind(
-      renderJobId,
-      job.project_id,
-      JSON.stringify({
-        mode: "validate-and-render",
-        profileId,
-        parentVersionId: versionId,
-        requestedFormats: payload.requestedFormats || ["pptx"],
-        plannedFromJobId: job.id,
-      }),
-    ),
-    env.DB.prepare(
-      "UPDATE presentation_projects SET status = 'queued', updated_at = datetime('now') " +
-        "WHERE id = ?",
-    ).bind(job.project_id),
-    env.DB.prepare(
-      "INSERT INTO presentation_events " +
-        "(id, project_id, event_type, payload_json) VALUES (?, ?, 'plan.completed', ?)",
-    ).bind(
-      randomId(),
-      job.project_id,
-      JSON.stringify({ jobId: job.id, versionId, renderJobId }),
-    ),
-  ]);
+        "WHERE id = ? AND status = 'running' AND attempt_count = ?",
+    ).bind(job.id, job.attempt_count),
+  );
   return { versionId, versionNumber, renderJobId };
 }
 
@@ -517,7 +549,7 @@ async function completeExportJob(
     env.DB.prepare(
       "INSERT INTO presentation_artifacts " +
         "(id, project_id, version_id, kind, r2_key, mime_type, byte_size, sha256, expires_at) " +
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "SELECT ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE " + JOB_COMPLETION_GUARD_SQL,
     ).bind(
       artifact.id,
       job.project_id,
@@ -528,24 +560,23 @@ async function completeExportJob(
       artifact.size,
       artifact.sha256,
       artifact.expiresAt,
+      job.id,
+      job.attempt_count,
     ),
   );
   statements.push(
     env.DB.prepare(
-      "UPDATE presentation_version_runtime SET export_report_json = ? WHERE version_id = ?",
-    ).bind(exportReport ? JSON.stringify(exportReport) : null, versionId),
-    env.DB.prepare(
-      "UPDATE presentation_jobs SET status = 'succeeded', leased_until = NULL, " +
-        "finished_at = datetime('now'), updated_at = datetime('now'), last_error = NULL " +
-        "WHERE id = ? AND status = 'running'",
-    ).bind(job.id),
+      "UPDATE presentation_version_runtime SET export_report_json = ? WHERE version_id = ? AND " +
+        JOB_COMPLETION_GUARD_SQL,
+    ).bind(exportReport ? JSON.stringify(exportReport) : null, versionId, job.id, job.attempt_count),
     env.DB.prepare(
       "UPDATE presentation_projects SET status = 'exported', updated_at = datetime('now') " +
-        "WHERE id = ?",
-    ).bind(job.project_id),
+        "WHERE id = ? AND " + JOB_COMPLETION_GUARD_SQL,
+    ).bind(job.project_id, job.id, job.attempt_count),
     env.DB.prepare(
       "INSERT INTO presentation_events " +
-        "(id, project_id, event_type, payload_json) VALUES (?, ?, 'job.completed', ?)",
+        "(id, project_id, event_type, payload_json) " +
+        "SELECT ?, ?, 'job.completed', ? WHERE " + JOB_COMPLETION_GUARD_SQL,
     ).bind(
       randomId(),
       job.project_id,
@@ -555,9 +586,20 @@ async function completeExportJob(
         versionId,
         artifactCount: artifactRows.length,
       }),
+      job.id,
+      job.attempt_count,
     ),
   );
-  await env.DB.batch(statements);
+  await runJobCompletion(
+    env.DB,
+    job,
+    statements,
+    env.DB.prepare(
+      "UPDATE presentation_jobs SET status = 'succeeded', leased_until = NULL, " +
+        "finished_at = datetime('now'), updated_at = datetime('now'), last_error = NULL " +
+        "WHERE id = ? AND status = 'running' AND attempt_count = ?",
+    ).bind(job.id, job.attempt_count),
+  );
   return { artifactIds: artifactRows.map((artifact) => artifact.id) };
 }
 
@@ -568,28 +610,36 @@ async function completeTerminalJob(
   errorMessage: string,
 ): Promise<void> {
   const message = errorMessage.slice(0, MAX_ERROR_LENGTH);
-  await env.DB.batch([
+  await runJobCompletion(
+    env.DB,
+    job,
+    [
+      env.DB.prepare(
+        "UPDATE presentation_projects SET status = ?, updated_at = datetime('now') " +
+          "WHERE id = ? AND " + JOB_COMPLETION_GUARD_SQL,
+      ).bind(status === "blocked" ? "blocked" : "failed", job.project_id, job.id, job.attempt_count),
+      env.DB.prepare(
+        "UPDATE presentation_project_runtime SET last_error = ?, blocked_reason = ?, " +
+          "updated_at = datetime('now') WHERE project_id = ? AND " + JOB_COMPLETION_GUARD_SQL,
+      ).bind(message, status === "blocked" ? message : null, job.project_id, job.id, job.attempt_count),
+      env.DB.prepare(
+        "INSERT INTO presentation_events " +
+          "(id, project_id, event_type, payload_json) " +
+          "SELECT ?, ?, 'job.failed', ? WHERE " + JOB_COMPLETION_GUARD_SQL,
+      ).bind(
+        randomId(),
+        job.project_id,
+        JSON.stringify({ jobId: job.id, jobType: job.job_type, status, message }),
+        job.id,
+        job.attempt_count,
+      ),
+    ],
     env.DB.prepare(
       "UPDATE presentation_jobs SET status = ?, leased_until = NULL, " +
         "finished_at = datetime('now'), updated_at = datetime('now'), last_error = ? " +
-        "WHERE id = ? AND status = 'running'",
-    ).bind(status, message, job.id),
-    env.DB.prepare(
-      "UPDATE presentation_projects SET status = ?, updated_at = datetime('now') WHERE id = ?",
-    ).bind(status === "blocked" ? "blocked" : "failed", job.project_id),
-    env.DB.prepare(
-      "UPDATE presentation_project_runtime SET last_error = ?, blocked_reason = ? " +
-        "WHERE project_id = ?",
-    ).bind(message, status === "blocked" ? message : null, job.project_id),
-    env.DB.prepare(
-      "INSERT INTO presentation_events " +
-        "(id, project_id, event_type, payload_json) VALUES (?, ?, 'job.failed', ?)",
-    ).bind(
-      randomId(),
-      job.project_id,
-      JSON.stringify({ jobId: job.id, jobType: job.job_type, status, message }),
-    ),
-  ]);
+        "WHERE id = ? AND status = 'running' AND attempt_count = ?",
+    ).bind(status, message, job.id, job.attempt_count),
+  );
 }
 
 async function completeJob(request: Request, env: Env): Promise<Response> {
@@ -597,8 +647,12 @@ async function completeJob(request: Request, env: Env): Promise<Response> {
   if (!body) return jsonResponse({ error: "invalid_complete_request" }, 400);
   const jobId = body?.jobId;
   const status = body?.status;
+  const attemptCount = body?.attemptCount;
   if (
     !isUuid(jobId) ||
+    typeof attemptCount !== "number" ||
+    !Number.isInteger(attemptCount) ||
+    attemptCount < 1 ||
     typeof status !== "string" ||
     (status !== "succeeded" && status !== "failed" && status !== "blocked")
   ) {
@@ -610,6 +664,9 @@ async function completeJob(request: Request, env: Env): Promise<Response> {
     .bind(jobId)
     .first<JobRow>();
   if (!job) return jsonResponse({ error: "job_not_found" }, 404);
+  if (job.attempt_count !== attemptCount) {
+    return jsonResponse({ error: JOB_LEASE_NOT_CURRENT }, 409);
+  }
   if (job.status !== "running") {
     return jsonResponse({ error: "job_not_running", status: job.status }, 409);
   }
@@ -634,8 +691,7 @@ async function completeJob(request: Request, env: Env): Promise<Response> {
         const exportResult = await completeExportJob(env, job, body);
         return jsonResponse({ status, jobId, ...exportResult });
       }
-      await completeTerminalJob(env, job, "blocked", "planner_completion_not_supported");
-      return jsonResponse({ status: "blocked", jobId }, 409);
+      return jsonResponse({ error: "job_type_not_supported" }, 409);
     }
 
     const errorMessage =
@@ -645,10 +701,14 @@ async function completeJob(request: Request, env: Env): Promise<Response> {
     await completeTerminalJob(env, job, status, errorMessage);
     return jsonResponse({ status, jobId });
   } catch (error) {
+    const message = error instanceof Error ? error.message : "unknown_error";
+    if (message === JOB_LEASE_NOT_CURRENT) {
+      return jsonResponse({ error: JOB_LEASE_NOT_CURRENT }, 409);
+    }
     return jsonResponse(
       {
         error: "job_completion_rejected",
-        message: error instanceof Error ? error.message : "unknown_error",
+        message,
       },
       400,
     );

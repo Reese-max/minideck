@@ -5,6 +5,10 @@ import {
   sha256Hex,
   verifyPkce,
 } from "./crypto";
+import {
+  isImmutableOwnerId,
+  ownerIdFromGithubProfile,
+} from "./owner-id.mjs";
 import type { AuthPrincipal, Env } from "./types";
 
 const ACCESS_TOKEN_TTL_MS = 60 * 60 * 1000;
@@ -255,10 +259,7 @@ async function exchangeGithubCode(
     },
   });
   if (!userResponse.ok) return null;
-  const userBody = (await userResponse.json()) as { login?: unknown };
-  return typeof userBody.login === "string" && userBody.login.length <= 200
-    ? userBody.login
-    : null;
+  return ownerIdFromGithubProfile(await userResponse.json());
 }
 
 async function handleCallback(request: Request, env: Env): Promise<Response> {
@@ -304,8 +305,8 @@ async function handleCallback(request: Request, env: Env): Promise<Response> {
   }
   if (!githubCode) return textResponse("invalid_request", 400);
 
-  const ownerLogin = await exchangeGithubCode(request, env, githubCode);
-  if (!ownerLogin) return textResponse("oauth_exchange_failed", 502);
+  const ownerSubject = await exchangeGithubCode(request, env, githubCode);
+  if (!ownerSubject) return textResponse("oauth_exchange_failed", 502);
 
   const used = await env.DB.prepare(
     "UPDATE presentation_oauth_requests SET used_at = datetime('now') " +
@@ -326,7 +327,7 @@ async function handleCallback(request: Request, env: Env): Promise<Response> {
       requestRow.client_id,
       requestRow.redirect_uri,
       requestRow.code_challenge,
-      ownerLogin,
+      ownerSubject,
       new Date(Date.now() + AUTH_CODE_TTL_MS).toISOString(),
     )
     .run();
@@ -373,6 +374,7 @@ async function handleToken(request: Request, env: Env): Promise<Response> {
     }>();
   if (
     !codeRow ||
+    !isImmutableOwnerId(codeRow.owner_login) ||
     codeRow.used_at ||
     codeRow.client_id !== clientId ||
     codeRow.redirect_uri !== redirectUri ||
@@ -413,50 +415,53 @@ async function handleRefreshToken(
     }>();
   if (
     !row ||
+    !isImmutableOwnerId(row.owner_login) ||
     row.revoked_at ||
     !row.refresh_expires_at ||
     new Date(row.refresh_expires_at).getTime() <= Date.now()
   ) {
     return jsonResponse({ error: "invalid_grant" }, 400);
   }
-  await env.DB.prepare(
-    "UPDATE presentation_oauth_tokens SET last_used_at = datetime('now') " +
-      "WHERE refresh_token_hash = ?",
-  )
-    .bind(row.refresh_token_hash)
-    .run();
-  const response = await issueTokens(env, row.owner_login);
-  await env.DB.prepare(
-    "UPDATE presentation_oauth_tokens SET revoked_at = datetime('now') " +
-      "WHERE refresh_token_hash = ?",
-  )
-    .bind(row.refresh_token_hash)
-    .run();
-  return response;
+  return issueTokens(env, row.owner_login, row.refresh_token_hash);
 }
 
 async function issueTokens(
   env: Env,
-  ownerLogin: string,
+  ownerSubject: string,
+  previousRefreshHash?: string,
 ): Promise<Response> {
   const accessToken = randomToken(32);
   const refreshToken = randomToken(32);
   const accessExpiresAt = new Date(Date.now() + ACCESS_TOKEN_TTL_MS).toISOString();
   const refreshExpiresAt = new Date(Date.now() + REFRESH_TOKEN_TTL_MS).toISOString();
-  await env.DB.prepare(
+  const insert = env.DB.prepare(
     "INSERT INTO presentation_oauth_tokens " +
       "(access_token_hash, refresh_token_hash, owner_login, scopes_json, " +
-      "access_expires_at, refresh_expires_at) VALUES (?, ?, ?, ?, ?, ?)",
+      "access_expires_at, refresh_expires_at) SELECT ?, ?, ?, ?, ?, ?" +
+      (previousRefreshHash ? " WHERE EXISTS (SELECT 1 FROM presentation_oauth_tokens " +
+        "WHERE refresh_token_hash = ? AND revoked_at IS NULL AND julianday(refresh_expires_at) > julianday('now'))" : ""),
   )
     .bind(
       await sha256Hex(accessToken),
       await sha256Hex(refreshToken),
-      ownerLogin,
+      ownerSubject,
       JSON.stringify(DEFAULT_SCOPES),
       accessExpiresAt,
       refreshExpiresAt,
-    )
-    .run();
+      ...(previousRefreshHash ? [previousRefreshHash] : []),
+    );
+  if (previousRefreshHash) {
+    const rotated = await env.DB.batch([
+      insert,
+      env.DB.prepare(
+        "UPDATE presentation_oauth_tokens SET revoked_at = datetime('now'), last_used_at = datetime('now') " +
+          "WHERE refresh_token_hash = ? AND revoked_at IS NULL",
+      ).bind(previousRefreshHash),
+    ]);
+    if (rotated[0].meta.changes !== 1) return jsonResponse({ error: "invalid_grant" }, 400);
+  } else {
+    await insert.run();
+  }
   return jsonResponse({
     access_token: accessToken,
     refresh_token: refreshToken,
@@ -491,6 +496,7 @@ export async function authenticateMcpRequest(
     }>();
   if (
     !row ||
+    !isImmutableOwnerId(row.owner_login) ||
     row.revoked_at ||
     new Date(row.access_expires_at).getTime() <= Date.now()
   ) {

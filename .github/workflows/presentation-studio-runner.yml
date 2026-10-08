@@ -3,6 +3,10 @@ name: Presentation Studio Runner
 on:
   pull_request:
     paths:
+      - "src/**"
+      - "test/**"
+      - "package.json"
+      - "package-lock.json"
       - "workers/presentation-studio-runner/**"
       - "workers/presentation-studio-mcp/src/jobs.ts"
       - "workers/presentation-studio-mcp/src/presentation.ts"
@@ -27,11 +31,20 @@ jobs:
         with:
           node-version: "22"
           cache: npm
-          cache-dependency-path: workers/presentation-studio-runner/package-lock.json
+          cache-dependency-path: |
+            package-lock.json
+            workers/presentation-studio-runner/package-lock.json
+      - run: npm ci
+      - run: npm ci --prefix workers/presentation-studio-mcp
+      - run: npm run check
       - run: cd workers/presentation-studio-runner && npm ci
       - run: cd workers/presentation-studio-runner && npx --no-install wrangler types
       - run: cd workers/presentation-studio-runner && npm run check
       - run: cd workers/presentation-studio-runner && npx --no-install wrangler deploy --dry-run
+      - name: Dry-run the preview named environment config
+        run: cd workers/presentation-studio-runner && npx --no-install wrangler deploy --dry-run --env preview --containers-rollout=none
+      - name: Dry-run the production named environment config
+        run: cd workers/presentation-studio-runner && npx --no-install wrangler deploy --dry-run --env production --containers-rollout=none
 
   container-smoke:
     runs-on: ubuntu-latest
@@ -76,3 +89,13 @@ jobs:
               test -s "$work/deck.pptx"
               test -s "$work/deck.pdf"
             '
+
+      - name: Render all 21 slides and verify production contact-sheet coverage
+        run: |
+          docker run --rm --network none --platform linux/amd64 \
+            -v "$GITHUB_WORKSPACE/workers/presentation-studio-runner/acceptance:/tmp/acceptance:ro" \
+            -v "$GITHUB_WORKSPACE/workers/presentation-studio-runner/test/fixtures:/tmp/fixtures:ro" \
+            -e MINIDECK_CONTENT_BRIEFS=/tmp/fixtures/content-briefs.json \
+            -e MINIDECK_RUNNER_MODULE=/app/runner/execute-job.mjs \
+            presentation-studio-runner:test \
+            node /tmp/acceptance/visual-render.mjs

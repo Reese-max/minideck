@@ -167,6 +167,7 @@ export async function loadJobInput(
 
   return {
     jobId: job.id,
+    attemptCount: job.attemptCount,
     projectId: job.projectId,
     type: job.type,
     title: project.title,

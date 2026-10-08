@@ -2,9 +2,12 @@ import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { normalizeIntentionalDecorationOverflow } from "./deck-normalizer.mjs";
 import { claimIntegrityCheck, claimTextMap, runWithClaimIntegrityGate } from "./claim-integrity.mjs";
+import { planVisualCoverage } from "./visual-coverage.mjs";
+import { checkClaimBoundary, redactSensitiveClaims } from "./claim-boundary.mjs";
 
 const MAX_INPUT_BYTES = 40 * 1024 * 1024;
 const MAX_COMMAND_OUTPUT = 4 * 1024 * 1024;
@@ -159,40 +162,27 @@ function hasDashiGoal(spec) {
   );
 }
 
-function patchSpec(spec, patch) {
-  if (!isObject(patch)) return spec;
-  const next = { ...spec, ...patch };
-  if (Array.isArray(patch.slides) && Array.isArray(spec.slides)) {
-    const patches = new Map(
-      patch.slides
-        .filter((slide) => isObject(slide) && typeof slide.id === "string")
-        .map((slide) => [slide.id, slide]),
-    );
-    next.slides = spec.slides.map((slide) => {
-      if (!isObject(slide) || typeof slide.id !== "string" || !patches.has(slide.id)) return slide;
-      return { ...slide, ...patches.get(slide.id) };
-    });
-  }
-  return next;
-}
-
 async function writeSources(input, workDir) {
   // Source bytes remain in R2 and are intentionally not copied through the
   // Workflow RPC payload. Dashi renders the ChatGPT-first spec; later judges
   // can read the immutable source objects by these metadata keys.
   await writeFile(join(workDir, "sources.json"), JSON.stringify(input.sources || [], null, 2));
-  await writeFile(join(workDir, "source-map.json"), JSON.stringify(input.sourceMap || {}, null, 2));
+  await writeFile(join(workDir, "source-map.json"), JSON.stringify(redactSensitiveClaims(input.sourceMap || {}), null, 2));
 }
 
 async function prepareGoal(input, workDir) {
   const goalPath = join(workDir, "goal.json");
   const payload = isObject(input.payload) ? input.payload : {};
-  let spec = isObject(input.spec) ? input.spec : null;
+  const spec = isObject(input.spec) ? input.spec : null;
   const hasPatch = isObject(payload.specPatch);
-  if (input.type === "revision" && !hasPatch && !spec) {
+  // specPatch must be validated and applied by the Workflow before dispatch;
+  // a residual patch reaching the container is a validation bypass, not input.
+  if (hasPatch) {
+    return { blocked: "SPEC_PATCH_REQUIRES_WORKFLOW_VALIDATION" };
+  }
+  if (input.type === "revision" && !spec) {
     return { blocked: "REVISION_REQUIRES_SPEC_PATCH" };
   }
-  if (spec && hasPatch) spec = patchSpec(spec, payload.specPatch);
   if (spec && hasDashiGoal(spec)) {
     const goal = {
       ...spec,
@@ -331,7 +321,7 @@ function commandPass(command) {
   return Boolean(command && command.exitCode === 0);
 }
 
-function makeAudit(renderResult, input, exportPass = undefined) {
+function makeAudit(renderResult, input, exportPass = undefined, visualCoverage = undefined) {
   const commands = { ...renderResult.commands, claimIntegrity: claimIntegrityCheck(input) };
   const deterministic = {
     goalSpec: commandPass(commands.goalSpec),
@@ -364,13 +354,27 @@ function makeAudit(renderResult, input, exportPass = undefined) {
     deterministic,
     visualJudge: { status: "not_configured", issues: ["visual_judge_not_configured"] },
     factualJudge: { status: "not_configured", issues: ["factual_judge_not_configured"] },
+    visualCoverage: visualCoverage
+      ? {
+          complete: visualCoverage.complete,
+          slideCount: visualCoverage.slideCount,
+          screenshotCount: visualCoverage.screenshotCount,
+          sheetCount: visualCoverage.sheetCount,
+          expectedSlideIds: visualCoverage.expectedSlideIds,
+          evaluatedSlideIds: visualCoverage.evaluatedSlideIds,
+          sheets: (visualCoverage.sheets || []).map((sheet) => ({
+            kind: sheet.kind,
+            slideIds: sheet.slideIds,
+          })),
+        }
+      : undefined,
     evidence,
     blockedReason: technicalPass ? "JUDGES_NOT_CONFIGURED" : "DASHI_TECHNICAL_CHECK_FAILED",
   };
 }
 
 async function upload(input, kind, bytes, contentType) {
-  const response = await fetch(`http://${STORAGE_HOST}/storage/${input.jobId}/${kind}`, {
+  const response = await fetch(`http://${STORAGE_HOST}/storage/${input.jobId}/${input.attemptCount}/${kind}`, {
     method: "PUT",
     headers: { "content-type": contentType, "content-length": String(bytes.byteLength) },
     body: bytes,
@@ -380,52 +384,71 @@ async function upload(input, kind, bytes, contentType) {
   return JSON.parse(text);
 }
 
-async function createPreview(workDir) {
-  const screenshotsDir = join(workDir, "screenshots");
-  let names;
+async function planJobVisualCoverage(workDir) {
+  let slideIds = [];
   try {
-    names = (await readdir(screenshotsDir))
-      .filter((name) => name.endsWith(".png"))
-      .sort()
-      .slice(0, 20);
+    const goal = await readJson(join(workDir, "goal.json"));
+    slideIds = (Array.isArray(goal?.slides) ? goal.slides : []).map((slide) =>
+      isObject(slide) ? slide.id : undefined,
+    );
   } catch {
-    return null;
+    slideIds = [];
   }
-  if (names.length === 0) return null;
+  let names = [];
   try {
-    const requireFromDashi = createRequire(join(DashiProject, "package.json"));
-    const { PNG } = requireFromDashi("pngjs");
-    const tileWidth = 480;
-    const tileHeight = 270;
-    const columns = Math.min(2, names.length);
-    const rows = Math.ceil(names.length / columns);
-    const sheet = new PNG({ width: columns * tileWidth, height: rows * tileHeight });
-    for (let index = 0; index < names.length; index += 1) {
-      const image = PNG.sync.read(await readFile(join(screenshotsDir, names[index])));
-      const column = index % columns;
-      const row = Math.floor(index / columns);
-      for (let y = 0; y < tileHeight; y += 1) {
-        const sourceY = Math.min(image.height - 1, Math.floor((y * image.height) / tileHeight));
-        for (let x = 0; x < tileWidth; x += 1) {
-          const sourceX = Math.min(image.width - 1, Math.floor((x * image.width) / tileWidth));
-          const sourceOffset = (sourceY * image.width + sourceX) * 4;
-          const targetOffset = ((row * tileHeight + y) * sheet.width + column * tileWidth + x) * 4;
-          sheet.data[targetOffset] = image.data[sourceOffset];
-          sheet.data[targetOffset + 1] = image.data[sourceOffset + 1];
-          sheet.data[targetOffset + 2] = image.data[sourceOffset + 2];
-          sheet.data[targetOffset + 3] = image.data[sourceOffset + 3];
-        }
-      }
-    }
-    const previewPath = join(workDir, "preview.png");
-    await writeFile(previewPath, PNG.sync.write(sheet));
-    return previewPath;
+    names = await readdir(join(workDir, "screenshots"));
   } catch {
-    return null;
+    names = [];
   }
+  return planVisualCoverage(slideIds, names);
 }
 
-async function collectArtifacts(input, renderResult, audit, includeExports = {}) {
+async function writeContactSheet(screenshotsDir, fileNames, previewPath) {
+  const requireFromDashi = createRequire(join(DashiProject, "package.json"));
+  const { PNG } = requireFromDashi("pngjs");
+  const tileWidth = 480;
+  const tileHeight = 270;
+  const columns = Math.min(2, fileNames.length);
+  const rows = Math.ceil(fileNames.length / columns);
+  const sheet = new PNG({ width: columns * tileWidth, height: rows * tileHeight });
+  for (let index = 0; index < fileNames.length; index += 1) {
+    const image = PNG.sync.read(await readFile(join(screenshotsDir, fileNames[index])));
+    const column = index % columns;
+    const row = Math.floor(index / columns);
+    for (let y = 0; y < tileHeight; y += 1) {
+      const sourceY = Math.min(image.height - 1, Math.floor((y * image.height) / tileHeight));
+      for (let x = 0; x < tileWidth; x += 1) {
+        const sourceX = Math.min(image.width - 1, Math.floor((x * image.width) / tileWidth));
+        const sourceOffset = (sourceY * image.width + sourceX) * 4;
+        const targetOffset = ((row * tileHeight + y) * sheet.width + column * tileWidth + x) * 4;
+        sheet.data[targetOffset] = image.data[sourceOffset];
+        sheet.data[targetOffset + 1] = image.data[sourceOffset + 1];
+        sheet.data[targetOffset + 2] = image.data[sourceOffset + 2];
+        sheet.data[targetOffset + 3] = image.data[sourceOffset + 3];
+      }
+    }
+  }
+  await writeFile(previewPath, PNG.sync.write(sheet));
+}
+
+async function createPreviews(workDir, coveragePlan) {
+  const screenshotsDir = join(workDir, "screenshots");
+  const previews = [];
+  for (const sheet of coveragePlan.sheets) {
+    if (!sheet.kind || sheet.fileNames.length === 0) continue;
+    const previewPath = join(workDir, `${sheet.kind}.png`);
+    try {
+      await writeContactSheet(screenshotsDir, sheet.fileNames, previewPath);
+      previews.push({ kind: sheet.kind, path: previewPath });
+    } catch {
+      // A sheet that cannot be composed is left out of the artifact list; the
+      // Judges coverage gate fails closed on the missing kind.
+    }
+  }
+  return previews;
+}
+
+async function collectArtifacts(input, renderResult, audit, includeExports = {}, coveragePlan = undefined) {
   const artifacts = [];
   const workDir = join(renderResult.deckDir, "..");
   const goal = await readFile(join(workDir, "goal.json"));
@@ -436,9 +459,11 @@ async function collectArtifacts(input, renderResult, audit, includeExports = {})
   artifacts.push(await upload(input, "html", html, "text/html"));
   artifacts.push(await upload(input, "quality", quality, "application/json"));
   artifacts.push(await upload(input, "audit", auditBytes, "application/json"));
-  const previewPath = await createPreview(workDir);
-  if (previewPath) {
-    artifacts.push(await upload(input, "preview", await readFile(previewPath), "image/png"));
+  const previews = coveragePlan
+    ? await createPreviews(workDir, coveragePlan)
+    : [];
+  for (const preview of previews) {
+    artifacts.push(await upload(input, preview.kind, await readFile(preview.path), "image/png"));
   }
   if (includeExports.pptx) {
     artifacts.push(await upload(input, "pptx", await readFile(includeExports.pptx), "application/vnd.openxmlformats-officedocument.presentationml.presentation"));
@@ -449,12 +474,9 @@ async function collectArtifacts(input, renderResult, audit, includeExports = {})
   return artifacts;
 }
 
-async function execute(input) {
+export async function execute(input, { prepare = prepareGoal, render = runDashi, collect = collectArtifacts } = {}) {
   if (!isObject(input) || typeof input.jobId !== "string") throw new Error("INVALID_JOB_INPUT");
-  const integrityInput =
-    isObject(input.spec) && isObject(input.payload?.specPatch)
-      ? { ...input, spec: patchSpec(input.spec, input.payload.specPatch) }
-      : input;
+  const integrityInput = input;
   return runWithClaimIntegrityGate(integrityInput, async () => {
   if (input.type === "plan") {
     return { status: "blocked", jobId: input.jobId, error: "PLANNER_FALLBACK_REQUIRES_CHATGPT_SLIDE_SPEC" };
@@ -465,9 +487,9 @@ async function execute(input) {
   const workDir = await mkdtemp(join(tmpdir(), `presentation-studio-${input.jobId}-`));
   try {
     await writeSources(input, workDir);
-    const goal = await prepareGoal(input, workDir);
+    const goal = await prepare(input, workDir);
     if (goal.blocked) return { status: "blocked", jobId: input.jobId, error: goal.blocked };
-    const renderResult = await runDashi(goal.goalPath, workDir);
+    const renderResult = await render(goal.goalPath, workDir);
     let exportPaths = {};
     let exportPass;
     if (input.type === "export") {
@@ -488,9 +510,27 @@ async function execute(input) {
       }
       if (requested.has("html")) exportPass = exportPass ?? true;
     }
-    const audit = makeAudit(renderResult, integrityInput, exportPass);
-    const artifacts = await collectArtifacts(input, renderResult, audit, exportPaths);
     const finalGoal = await readJson(goal.goalPath);
+    const renderedHtml = await readFile(join(renderResult.deckDir, "index.html"), "utf8");
+    const renderedBoundary = checkClaimBoundary(finalGoal, input.sourceMap, [
+      input.profile,
+      input.title,
+      input.brief,
+      input.payload,
+      input.sources,
+      renderedHtml,
+      renderResult.quality,
+      renderResult.commands,
+    ]);
+    if (!renderedBoundary.pass) {
+      return { status: "blocked", jobId: input.jobId, error: renderedBoundary.reason };
+    }
+    const coveragePlan = await planJobVisualCoverage(workDir);
+    const audit = makeAudit(renderResult, integrityInput, exportPass, coveragePlan);
+    if (input.type === "export" && !Object.values(audit.deterministic).every(Boolean)) {
+      return { status: "blocked", jobId: input.jobId, error: "EXPORT_VALIDATION_FAILED" };
+    }
+    const artifacts = await collect(input, renderResult, audit, exportPaths, coveragePlan);
     const rendererReport = {
       renderer: "dashi",
       dashiVersion: "0.4.11",
@@ -535,15 +575,17 @@ async function execute(input) {
   });
 }
 
-try {
-  const input = JSON.parse(await collectStdin());
-  const result = await execute(input);
-  process.stdout.write(JSON.stringify(result) + "\n");
-} catch (error) {
-  process.stdout.write(JSON.stringify({
-    status: "blocked",
-    jobId: null,
-    error: error instanceof Error ? error.message : "RUNNER_FAILED",
-  }) + "\n");
-  process.exitCode = 1;
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  try {
+    const input = JSON.parse(await collectStdin());
+    const result = await execute(input);
+    process.stdout.write(JSON.stringify(result) + "\n");
+  } catch (error) {
+    process.stdout.write(JSON.stringify({
+      status: "blocked",
+      jobId: null,
+      error: error instanceof Error ? error.message : "RUNNER_FAILED",
+    }) + "\n");
+    process.exitCode = 1;
+  }
 }

@@ -3,6 +3,14 @@ import type { ClaimedJob, DashiJobResult, JobType, JsonObject, RunnerEnv } from 
 
 const SERVICE_ORIGIN = "https://presentation-studio-mcp.internal";
 
+// A completion rejected because the lease moved on is terminal: the fenced
+// state must not burn Workflow step retries or fail the instance.
+const TERMINAL_JOB_ERRORS = new Set([
+  "job_lease_not_current",
+  "job_lease_expired",
+  "job_not_running",
+]);
+
 async function callMcpService(
   env: RunnerEnv,
   path: string,
@@ -27,7 +35,14 @@ async function callMcpService(
   } catch {
     throw new Error(`MCP_SERVICE_INVALID_JSON:${response.status}`);
   }
-  if (!response.ok || !value || typeof value !== "object" || Array.isArray(value)) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`MCP_SERVICE_ERROR:${response.status}`);
+  }
+  if (!response.ok) {
+    const error = (value as JsonObject).error;
+    if (response.status === 409 && TERMINAL_JOB_ERRORS.has(String(error))) {
+      return value as JsonObject;
+    }
     throw new Error(`MCP_SERVICE_ERROR:${response.status}`);
   }
   return value as JsonObject;
@@ -47,6 +62,8 @@ export async function claimJobs(
     const value = job as Record<string, unknown>;
     return (
       typeof value.id === "string" &&
+      typeof value.attemptCount === "number" &&
+      Number.isInteger(value.attemptCount) &&
       typeof value.projectId === "string" &&
       typeof value.type === "string" &&
       ["plan", "render", "revision", "export"].includes(value.type) &&
@@ -64,6 +81,7 @@ export async function completeJob(
 ): Promise<JsonObject> {
   const body: JsonObject = {
     jobId: job.id,
+    attemptCount: job.attemptCount,
     status: result.status,
   };
   if (result.status === "succeeded") {
@@ -91,6 +109,7 @@ export async function completeFailure(
   const message = error instanceof Error ? error.message : "runner_failed";
   return callMcpService(env, "/internal/jobs/complete", {
     jobId: job.id,
+    attemptCount: job.attemptCount,
     status: "failed",
     error: message.slice(0, 3_500),
   });

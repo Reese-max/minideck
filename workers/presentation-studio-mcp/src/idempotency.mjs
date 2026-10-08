@@ -86,8 +86,10 @@ async function beginIdempotency(db, ownerId, toolName, idempotencyKey, input) {
       )
       .bind(key)
       .first();
+    if (!current) {
+      throw new Error("REQUEST_IN_PROGRESS: retry with the same idempotency key later");
+    }
     if (
-      !current ||
       current.tool_name !== toolName ||
       current.request_hash !== requestHash
     ) {
@@ -153,8 +155,9 @@ export async function runIdempotent(
     await finishIdempotency(db, reservationState.reservation, output);
     return output;
   } catch (error) {
-    await releaseIdempotency(db, reservationState.reservation);
+    await releaseIdempotency(db, reservationState.reservation).catch(
+      () => undefined,
+    );
     throw error;
   }
 }
-
