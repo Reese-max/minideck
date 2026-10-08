@@ -270,6 +270,10 @@ test("an insert-race loser replays the winner result without re-running", async 
 test("an insert-race loser sees REQUEST_IN_PROGRESS while the winner runs", async () => {
   const inner = new SqliteIdempotencyD1();
   let releaseWinner;
+  let markWinnerStarted;
+  const winnerStarted = new Promise((resolve) => {
+    markWinnerStarted = resolve;
+  });
   const winnerPending = runIdempotent(
     inner,
     "github:1001",
@@ -277,10 +281,13 @@ test("an insert-race loser sees REQUEST_IN_PROGRESS while the winner runs", asyn
     "race-pending-key-01",
     { brief: "Quarterly review" },
     async () => "github:1001",
-    () => new Promise((resolve) => {
-      releaseWinner = resolve;
-    }),
+    () =>
+      new Promise((resolve) => {
+        releaseWinner = resolve;
+        markWinnerStarted();
+      }),
   );
+  await winnerStarted;
   const db = new RacyInsertD1(inner);
   await assert.rejects(
     runIdempotent(
