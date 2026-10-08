@@ -231,6 +231,43 @@ test("unbound sensitive source text is absent from the Dashi source map", async 
   assert.equal(inspected, true);
 });
 
+test("unbound sensitive identifiers cannot carry private text into Dashi inputs", async () => {
+  const privateMap = {
+    claims: [
+      sourceMap.claims[0],
+      { claimId: sentinel, text: sentinel, sensitive: true },
+    ],
+  };
+  assert.equal(checkClaimBoundary(safeSpec, privateMap).pass, true);
+  let inspected = false;
+  const calls = { render: 0, upload: 0 };
+  const result = await execute({
+    jobId: "sensitive-identifier-fixture", type: "render",
+    sourceMap: privateMap, spec: safeSpec, profile: {}, payload: {},
+    title: "Fixture", brief: "Fixture",
+  }, {
+    async prepare(_input, workDir) {
+      const copied = await readFile(join(workDir, "source-map.json"), "utf8");
+      assert.equal(copied.includes(sentinel), false);
+      assert.deepEqual(JSON.parse(copied).claims, [sourceMap.claims[0]]);
+      inspected = true;
+      return { blocked: "FIXTURE_DONE" };
+    },
+    async render() { calls.render += 1; },
+    async collect() { calls.upload += 1; },
+  });
+  assert.equal(inspected, true);
+  assert.equal(result.status, "blocked");
+  assert.deepEqual(calls, { render: 0, upload: 0 });
+});
+
+test("public identifiers remain in the redacted renderer source map", () => {
+  const publicMap = { claims: [{ claimId: sentinel, text: sentinel, sensitive: false }] };
+  const publicSpec = { slides: [{ id: "s1", claims: [sentinel], keyMessage: sentinel }] };
+  assert.equal(checkClaimBoundary(publicSpec, publicMap).pass, true);
+  assert.deepEqual(redactSensitiveClaims(publicMap), publicMap);
+});
+
 
 test("renderer output containing a sensitive sentinel is blocked before artifact collection", async () => {
   let renderCalls = 0;

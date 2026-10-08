@@ -74,14 +74,12 @@ export function checkClaimBoundary(spec, sourceMap, extraContent = []) {
   return inspect([spec, ...extraContent, safeSourceMap]) ? BLOCKED : ALLOWED;
 }
 
-/** Keep IDs for binding checks without carrying sensitive claim text into Dashi. */
+/** Only public claim records may enter Dashi; original bindings were checked first. */
 export function redactSensitiveClaims(sourceMap) {
   if (!isObject(sourceMap) || !Array.isArray(sourceMap.claims)) return sourceMap;
   return {
     ...sourceMap,
-    claims: sourceMap.claims.map((claim) => isObject(claim) && isSensitive(claim)
-      ? { claimId: claim.claimId, sensitive: true }
-      : claim),
+    claims: sourceMap.claims.filter((claim) => !isObject(claim) || !isSensitive(claim)),
   };
 }
 
