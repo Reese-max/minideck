@@ -78,12 +78,17 @@ function isUuid(value: unknown): value is string {
   return typeof value === "string" && /^[0-9a-f-]{36}$/i.test(value);
 }
 
-export function parseUtcDate(value: string): number {
-  const trimmed = value.trim();
-  if (trimmed.endsWith("Z") || /[+-]\d{2}:?\d{2}$/.test(trimmed)) {
-    return new Date(trimmed).getTime();
+export function parseUtcDate(value: unknown): number {
+  // Lease writers and the SQL fence use SQLite's canonical UTC second precision.
+  // Reject other spellings and calendar rollover instead of normalizing invalid lease data.
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(value)) {
+    return NaN;
   }
-  return new Date(trimmed.replace(" ", "T") + "Z").getTime();
+  const utc = value.replace(" ", "T") + "Z";
+  const timestamp = Date.parse(utc);
+  return Number.isFinite(timestamp) && new Date(timestamp).toISOString() === utc.replace("Z", ".000Z")
+    ? timestamp
+    : NaN;
 }
 
 function jobPayload(job: JobRow): JsonObject {
