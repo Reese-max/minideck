@@ -1,0 +1,32 @@
+{
+  "pr": 20,
+  "head": "1eb700f5b28fd0493d5bc0bfbaf1da737fd79766",
+  "findings": [
+    {
+      "severity": "med",
+      "file": "test/persona-historical-scope.mjs",
+      "line": 22,
+      "issue": "The ?N regex rewrites placeholders inside SQL literals/comments and drops anonymous placeholders when mixed with numbered ones. Valid SQL can fail or silently bind NULL instead of the supplied value."
+    },
+    {
+      "severity": "med",
+      "file": "test/persona-historical-scope.mjs",
+      "line": 25,
+      "issue": "The positional mapper silently discards surplus bind arguments (SELECT ?1 with two values succeeds), hiding binding defects that SQLite/D1 reject."
+    },
+    {
+      "severity": "med",
+      "file": "README.md",
+      "line": 32,
+      "issue": "README and docs/ci-admission.md still describe Actions budget admission failure as current. Read-only GitHub API checks confirm successful real check steps for main@31f7131 (run 34690640060, attempt 2) and this exact PR head (run 36695770634, attempt 2), both completed 2026-10-05."
+    },
+    {
+      "severity": "low",
+      "file": "docs/ci-admission.md",
+      "line": 52,
+      "issue": "The historical successful local test result has no candidate SHA, despite issue #6 requiring results to be bound to the tested revision; only the failing base SHA is recorded."
+    }
+  ],
+  "fixed": true,
+  "summary": "Fixed four defects: SQL placeholder parsing, silent excess bindings, stale Actions status, and missing candidate-SHA evidence. Regression tests failed before each fix; all seven gate scripts now pass on Node 22.19.0 and 26.7.0. Existing GitHub success receipts remain scoped to their original SHAs; this local follow-up has not been pushed."
+}

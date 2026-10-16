@@ -29,10 +29,10 @@ npm ci
 npm run check   # = npm test
 ```
 
-GitHub Actions 自動觸發目前被帳號 Actions budget 阻擋（runner admission
-failure，非程式缺陷）；診斷、恢復選項與本機證據綁定規則見
+2026-10-17 查核已確認 `main` 與本 PR 原始 head 的 CI check 實際執行成功；
+先前的 Actions budget admission failure、成功紀錄與本機證據綁定規則見
 [docs/ci-admission.md](docs/ci-admission.md)。本機結果只證明實際跑過的
-產品路徑，不代表雲端 gate 已恢復。
+產品路徑，不能替代新提交的雲端 gate 證據。
 
 ## 九個主要端點
 

@@ -16,13 +16,26 @@ function createD1() {
   return {
     prepare(sql) {
       let bound = [];
-      // D1 accepts numbered placeholders (?N) bound positionally; node:sqlite
-      // only binds anonymous (?) parameters. Translate ?N → ? and map every
-      // occurrence (in any order, repeats included) to bound[N-1].
-      const paramIndexes = [...sql.matchAll(/\?(\d+)/g)].map((m) => Number(m[1]));
-      const normalized = paramIndexes.length ? sql.replace(/\?\d+/g, "?") : sql;
-      const positional = () =>
-        paramIndexes.length ? paramIndexes.map((i) => bound[i - 1]) : bound;
+      // Node 22 binds ?N by name. Normalize actual SQL parameters only;
+      // SQLite assigns an anonymous ? the index after the largest seen so far.
+      const paramIndexes = [];
+      let parameterCount = 0;
+      const normalized = sql.replace(
+        /'(?:''|[^'])*'|"(?:""|[^"])*"|`(?:``|[^`])*`|\[[^\]]*\]|--[^\n]*|\/\*[\s\S]*?(?:\*\/|$)|\?(\d*)/g,
+        (token, digits) => {
+          if (digits === undefined) return token;
+          const index = digits ? Number(digits) : parameterCount + 1;
+          parameterCount = Math.max(parameterCount, index);
+          paramIndexes.push(index - 1);
+          return "?";
+        },
+      );
+      const positional = () => {
+        if (bound.length !== parameterCount) {
+          throw new RangeError("D1 mock bind parameter count mismatch");
+        }
+        return paramIndexes.map((i) => bound[i]);
+      };
       return {
         bind(...args) {
           bound = args;
@@ -116,8 +129,8 @@ const assets = {
 
 const mockDb = createD1();
 
-// Regression: D1 mock binder contract — every src/ query uses numbered ?N
-// placeholders, which node:sqlite cannot bind positionally (SQLITE_RANGE).
+// Regression: D1 mock binder contract — numbered ?N queries cannot bind
+// positionally in Node 22's node:sqlite (SQLITE_RANGE).
 // The mock must map each ?N occurrence — out of order and repeated — to
 // bound[N-1]. Covers guard.js upsert WHERE ?3 and store.js SELECT ?1 … ?1.
 {
@@ -130,6 +143,51 @@ const mockDb = createD1();
   assert.equal(row.second_again, "beta");
   console.log("PASS D1 mock ?N 依索引綁定（亂序與重複佔位符正確對應 bind 參數）");
 }
+
+// SQL text is not a parameter, and anonymous parameters use the next index
+// after the largest index encountered so far, including mixed ?N / ? queries.
+for (const [sql, values, expected] of [
+  ["SELECT '?1' AS literal, ?1 AS actual", ["alpha"], { literal: "?1", actual: "alpha" }],
+  ["SELECT '?1' AS literal", [], { literal: "?1" }],
+  ["SELECT 1 AS value /* ?", [], { value: 1 }],
+  ["SELECT 1 AS value -- comment\r?", [], { value: 1 }],
+  [
+    "SELECT 'it''s ?9' AS \"?8\", ?1 AS [actual?7], ? AS `next?6` /* ?5 */ -- ?4\n",
+    ["alpha", "beta"],
+    { "?8": "it's ?9", "actual?7": "alpha", "next?6": "beta" },
+  ],
+  [
+    "SELECT ?2 AS second_col, ? AS third_col, ?1 AS first_col, ? AS fourth_col, ?2 AS again",
+    ["alpha", "beta", "gamma", "delta"],
+    { second_col: "beta", third_col: "gamma", first_col: "alpha", fourth_col: "delta", again: "beta" },
+  ],
+  ["SELECT ? AS first_col, ?1 AS again, ? AS second_col", ["alpha", "beta"], { first_col: "alpha", again: "alpha", second_col: "beta" }],
+  ["SELECT ? AS first_col, ? AS second_col", ["alpha", "beta"], { first_col: "alpha", second_col: "beta" }],
+]) {
+  const statement = mockDb.prepare(sql).bind(...values);
+  assert.deepEqual({ ...await statement.first() }, expected, sql);
+  assert.deepEqual((await statement.all()).results.map((row) => ({ ...row })), [expected], sql);
+  await statement.run();
+}
+await mockDb.prepare("INSERT INTO quotas(scope, day, count) VALUES('literal?9', ?1, ?)")
+  .bind("binder-day", 7).run();
+assert.equal((await mockDb.prepare("SELECT count FROM quotas WHERE scope = 'literal?9'").first()).count, 7);
+console.log("PASS D1 mock 保留 SQL 字串、識別字與註解，並正確混用匿名及編號參數");
+
+for (const method of ["first", "all", "run"]) {
+  for (const [sql, values] of [
+    ["SELECT ?1", ["alpha", "extra"]],
+    ["SELECT ?2", ["missing-second"]],
+    ["SELECT 1", ["extra"]],
+  ]) {
+    await assert.rejects(
+      mockDb.prepare(sql).bind(...values)[method](),
+      /bind parameter count mismatch/,
+      `${method}: ${sql}`,
+    );
+  }
+}
+console.log("PASS D1 mock 的 first/all/run 拒絕錯誤參數數量");
 
 const mockEnv = {
   DB: mockDb,

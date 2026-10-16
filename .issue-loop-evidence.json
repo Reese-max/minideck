@@ -1,0 +1,16 @@
+{
+  "repo": "Reese-max/minideck",
+  "issue": 20,
+  "base_sha": "1eb700f5b28fd0493d5bc0bfbaf1da737fd79766",
+  "red_proof": "2026-10-17, Windows x64, Node 26.7.0. (1) Added SQL-token/mixed-parameter regressions before changing the original mapper: node --import ./test/register-loader.mjs test/persona-historical-scope.mjs exited 1 with ERR_SQLITE_ERROR, errcode 25, column index out of range for SELECT '?1' AS literal, ?1 AS actual. (2) After the SQL-token fix, added argument-count regressions before the count guard: the same command exited 1 with AssertionError: Missing expected rejection: first: SELECT ?1 (two supplied bind values). (3) Before changing the documentation, node test/ci-admission.mjs exited 1 with tests=2, pass=0, fail=2: obsolete budget-block status and missing candidate SHA. (4) Final review added EOF block-comment and CR line-comment regressions before correcting comment tokenization; the persona command exited 1 with RangeError: D1 mock bind parameter count mismatch for SELECT 1 AS value /* ?. All retained regressions pass after the fixes.",
+  "test_command": "npm run check",
+  "test_exit": 0,
+  "tests_passed": 7,
+  "tests_failed": 0,
+  "summary": "Reviewed PR #20 against issue #6 and fixed four findings with regression-first changes limited to the local test harness, its npm test registration, and CI evidence documentation. Seven npm gate scripts passed on Node 22.19.0 and 26.7.0, including the original persona acceptance checks and two CI-documentation subtests. npm ci and git diff --check exited 0. Read-only GitHub API checks confirmed successful real check steps for main@31f7131 (run 34690640060 attempt 2) and the admitted PR head (run 36695770634 attempt 2); these receipts do not validate the new local commit.",
+  "not_done": [
+    "No push, branch switches, preview/provider/production execution, or GitHub writes. Remote CI for the new local commit is unverified and remains for the driver.",
+    "The repository declares no lint, typecheck, or build scripts, so those separate gates were unavailable.",
+    "npm ci reported six high-severity dependency audit findings and blocked esbuild/workerd postinstall scripts under the existing npm policy. Dependency remediation and build activation were outside this harness/documentation review."
+  ]
+}
