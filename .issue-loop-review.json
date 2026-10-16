@@ -1,0 +1,14 @@
+{
+  "pr": 33,
+  "head": "b85d7c893c0ceef1a3e47818efaec4c3955d8fbe",
+  "findings": [
+    {
+      "severity": "low",
+      "file": "workers/presentation-studio-mcp/README.md",
+      "line": 50,
+      "issue": "The current runner API documentation lists only claim and complete, omitting the new POST /internal/jobs/renew endpoint and its bounded same-attempt renewal contract. Maintainers following this README cannot discover the renewal route or finite attempt horizons."
+    }
+  ],
+  "fixed": true,
+  "summary": "Fixed one low-severity documentation defect: the MCP README now documents POST /internal/jobs/renew, current/unexpired-attempt renewal and finite horizons, with a link to the renewal contract. No functional defects were substantiated against #32/#9 using the actual feature/presentation-studio-mcp-v2 base; the documentation assertion failed before the fix and passed afterward. Root check, MCP 55/55, Runner 65/65 and both Worker dry-runs passed (exit 0) on HEAD LF source bytes; isolated Preview and deployed runtime acceptance remain pending."
+}
