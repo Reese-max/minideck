@@ -14,13 +14,21 @@ Cloudflare Worker 上的 MiniMax HTML 簡報生成器。瀏覽器 UI 的建立�
 npx wrangler d1 execute minideck --remote --file migrations/0001_project_access_token.sql
 ```
 
+已具備 token 欄位的既有資料庫，升級本版前另執行一次發布狀態 migration（以下使用本機資料；正式環境由操作者核准後改為 `--remote`）：
+
+```bash
+npx wrangler d1 execute minideck --config ./wrangler.toml --local --file migrations/0002_published_version.sql
+```
+
+`0002` 會把每個既有專案當下存在的 `current_version > 0` 固定為 `published_version`，並記錄 migration 時間為 `published_at`，理由是保留已分享連結的內容。空專案或缺少版本資料的專案維持未發布。此為保留既有分享的唯一自動發布例外；之後生成、修訂、儲存及回退均只更新草稿。migration 與新 Worker 必須協調上線，避免舊 Worker 繼續依草稿提供公開內容。全新資料庫直接使用 `schema.sql`；不要對新 schema 或已完成遷移的資料庫重跑此 migration。
+
 下列範例以 Git Bash／WSL 的 `curl` 語法表示：
 
 ```bash
 BASE=http://127.0.0.1:8787
 ```
 
-## 九個主要端點
+## 主要端點
 
 | # | 方法與路徑 | 用途 |
 |---:|---|---|
@@ -32,7 +40,10 @@ BASE=http://127.0.0.1:8787
 | 6 | `POST /api/projects/:id/deck` | 儲存完整 HTML 為新版本 |
 | 7 | `GET /api/projects/:id` | 讀取狀態、版本與對話紀錄 |
 | 8 | `DELETE /api/projects/:id` | 刪除專案 metadata、版本與專案額度 |
-| 9 | `GET /p/:id` | 讀取最新版匿名播放頁 |
+| 9 | `GET /p/:id` | 只播放已發布版本；未發布回 404 |
+| 10 | `POST /api/projects/:id/publish` | 驗證並發布指定既有版本，需權杖 |
+| 11 | `POST /api/projects/:id/unpublish` | 下線公開簡報、保留草稿與歷史，需權杖 |
+| 12 | `GET /api/projects/:id/preview?version=N` | 使用公開播放器預覽指定版本，需權杖；省略版本則預覽最新草稿 |
 
 ### 1. 查額度
 
@@ -106,6 +117,17 @@ curl -sS "$BASE/api/projects/$PROJECT_ID" \
 
 ### 8. 取得匿名播放頁
 
+須先明確發布一個既有版本，例如發布 v1：
+
+```bash
+curl -sS "$BASE/api/projects/$PROJECT_ID/publish" \
+  -H 'content-type: application/json' \
+  -H "X-Project-Token: $PROJECT_TOKEN" \
+  --data '{"version":1}'
+```
+
+成功回傳 `{"published_version":1,"published_at":<Unix 毫秒時間>}`。只接受同專案、D1 版本紀錄及 R2 HTML 均存在，且通過 HTML 大小、至少三頁、結尾與圖片佔位符檢查的版本。發布不呼叫 MiniMax、不建立新版本、不扣額度。
+
 ```bash
 curl -sS -o play.html -w '%{http_code}\n' "$BASE/p/$PROJECT_ID"
 ```
@@ -134,14 +156,16 @@ curl -sS "$BASE/api/projects/$PROJECT_ID/deck?version=1" \
 
 ### 2. 公開分享播放器語意
 
-- **最新版本公開**：訪客瀏覽 `/p/:id` 時，播放器直接呈現當前最新版本（`current_version`）。播放頁不包含、亦不洩露 `X-Project-Token`。
-- **歷史版本隔離**：訪客若嘗試在播放頁附帶 `?version=N` 讀取非當前版本，系統將檢查專案權杖；未授權者一律回傳 `403 Forbidden`，防止過往被刪改或撤回的草稿外洩。
-- **回退語意（Rollback）**：將既有歷史版本複製為新的最新版（例如 v1 回退產生 v3）。回退後，公開分享連結 `/p/:id` 即呈現 v3，而被取代的中間草稿版本（例如 v2）依然受到嚴格保護，不會對外公開。
+- **草稿與公開版本分離**：`current_version` 是最新草稿；`published_version` 是公開版本，可為 null。訪客瀏覽 `/p/:id` 只會看到已發布版本。建立專案、generate、revise、deck save 與 rollback 都不會自動發布。
+- **版本隔離**：`/p/:id?version=N` 只有 N 等於已發布版本時可匿名播放；其他版本一律需 `X-Project-Token`，包含尚未發布的 current draft。原始 deck API 一律需權杖，包含已發布版本。播放器不包含權杖。
+- **回退語意（Rollback）**：將歷史版本複製為新草稿（例如 v1 回退產生 v3）。公開連結仍呈現原先發布的 v2；要改為 v3，必須再次按發布或呼叫 publish。
+- **發布與並發**：publish／unpublish 沿用 save／generate／revise／rollback／delete 的 D1 專案鎖；衝突回 `409`，請重新讀取狀態後重試。R2 完整上傳後才提交版本；發布在鎖內驗證 HTML，並用單一含同專案版本存在條件的 UPDATE 原子更新公開版本與時間。
+- **下線與快取**：unpublish 清空公開版本與時間，`/p/:id` 回 404，指定版本的匿名請求回 403。所有播放器、預覽、狀態與 mutation 回應均為 `Cache-Control: no-store`。已下載或已開啟在觀眾瀏覽器的副本無法回收。
 - **撤回與刪除（Revocation & Deletion）**：使用 `DELETE /api/projects/:id` 刪除專案後，公開播放頁與所有版本 API 立即失效（回傳 `404`），R2 物件同步清除。
 
 ### 3. 既有連結遷移與相容性決策
 
-- **公開分享連結**：現有 `/p/:id` 連結行為維持相容，持續公開播放最新版本，外部受眾無需更新網址。
+- **公開分享連結**：網址不變；migration 固定既有專案當下的版本。新草稿不再更新公開內容，作者必須明確發布。
 - **直接 API 呼叫**：先前未受保護的 `GET /api/projects/:id/deck` 現在一律強制驗證 `X-Project-Token`。任何以腳本或 API 自動抓取簡報 HTML 的使用者，請於請求標頭中加入 `X-Project-Token`。
 
 ### 4. 回退版本
@@ -165,6 +189,48 @@ curl -sS "$BASE/api/projects/$PROJECT_ID/rollback" \
 curl -sS -X DELETE "$BASE/api/projects/$PROJECT_ID" \
   -H "X-Project-Token: $PROJECT_TOKEN"
 ```
+
+### 6. 預覽與下線
+
+UI「發布與分享」會顯示草稿 head、公開 head 與未發布變更數。「發布前預覽」與版本歷史的「預覽」都透過帶權杖的 preview API 載入同一公開播放器；預覽不會改變發布狀態，也不產生可永久公開的預覽網址。「發布 vN」與「下線」需要明確點擊；複製公開連結只在專案已發布時可用。
+
+```bash
+# 以實際公開 renderer 預覽草稿 v2；權杖僅放 header，不放網址。
+curl -sS "$BASE/api/projects/$PROJECT_ID/preview?version=2" \
+  -H "X-Project-Token: $PROJECT_TOKEN" -o preview.html
+
+# 下線（重複呼叫亦安全），保留專案與所有版本。
+curl -sS "$BASE/api/projects/$PROJECT_ID/unpublish" \
+  -H "X-Project-Token: $PROJECT_TOKEN" -X POST
+```
+
+下線 receipt 為 `{"published_version":null,"published_at":null}`；owner 仍可預覽、讀取與重新發布任一有效版本。`GET /api/projects/:id` 額外回傳 `current_version`、`published_version` 與 `published_at`。
+
+## Issue #4 驗收與本機測試
+
+```bash
+npm ci
+npm run check
+npx wrangler deploy --config ./wrangler.toml --dry-run --outdir .wrangler/issue-4-build
+```
+
+`npm run check` 保留全部既有測試，另執行 12 項實際本機 workerd／D1／R2 測試與 3 項 UI 狀態回歸。Miniflare 使用已宣告 Wrangler 的鎖定依賴；fixture 與 provider 回應全部在本機隔離，不使用正式資料、Secrets 或付費 AI。
+
+| Issue #4 驗收條件 | 實作與驗證 |
+|---|---|
+| Schema 分離、legacy 相容政策 | `schema.sql`／`0002`；既有分享固定、空專案與缺少版本維持未發布 |
+| 所有草稿寫入不影響公開內容 | 沿用 `saveDeckVersion`；save、generate、revise、rollback 的 runtime 回歸 |
+| 匿名只讀公開版本 | `/p/:id` 固定 published head；current draft、歷史版本與 URL token 均驗證拒絕 |
+| 發布權杖、同專案版本與 HTML 驗證 | 無效權杖、其他專案、缺少／已刪版本與 R2、無效／過大 HTML 測試 |
+| 原子切換與 receipt | 專案鎖＋條件式 UPDATE；version／timestamp receipt 與並發 save/publish 測試 |
+| Owner preview 重用 renderer | preview 與公開 HTML 相等測試；current／歷史草稿授權測試 |
+| 下線保留版本且不再匿名提供 HTML | 重複下線、匿名 URL／舊快取條件標頭、owner 讀取及重新發布測試 |
+| UI 分辨兩個 head 與變更數 | UI 回歸驗證顯示、明確發布／下線，以及新專案生成失敗時清除舊狀態 |
+| Rollback 後須再次發布 | v1→v3 草稿不影響已發布 v2；重新發布才切換 |
+| DELETE 撤銷並清理全部 deck | 與 publish 競爭、公開／預覽／API 404、D1 versions 與 R2 prefix 清空測試 |
+| Legacy／舊版發布／並發／預覽競爭 | runtime 遷移與完整生命週期、UI 過期預覽回應回歸 |
+
+此處驗證的是本機 Worker runtime 與綁定；遠端 Preview、CI 與正式環境 migration／部署須由 driver 另行執行。本專案未設定獨立 lint、typecheck、coverage ratchet、CRAP 或 mutation gate；打包以 Wrangler dry-run 驗證。
 
 ## SSE 事件格式
 

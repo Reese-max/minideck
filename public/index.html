@@ -128,10 +128,32 @@
         </div>
       </section>
 
+      <section class="panel export-row" aria-labelledby="publication-title">
+        <div>
+          <h2 id="publication-title">發布與分享</h2>
+          <p id="publication-status" aria-live="polite">草稿 v0 · 尚未發布</p>
+          <p id="publication-feedback" role="status">編輯與儲存只會更新草稿；按發布才會更新公開連結。</p>
+        </div>
+        <div class="export-actions">
+          <button id="btn-player-preview" class="outline-button" type="button" disabled>發布前預覽</button>
+          <button id="btn-publish" class="outline-button" type="button" disabled>發布</button>
+          <button id="btn-unpublish" class="outline-button" type="button" disabled>下線</button>
+        </div>
+      </section>
+
+      <dialog id="player-preview" aria-labelledby="player-preview-title">
+        <header class="panel-toolbar">
+          <h2 id="player-preview-title">發布前預覽</h2>
+          <button class="outline-button" type="button">關閉預覽</button>
+        </header>
+        <p data-player-preview-status role="status"></p>
+        <iframe title="公開播放器預覽" sandbox="allow-scripts allow-same-origin"></iframe>
+      </dialog>
+
       <section id="export-buttons" class="panel export-row" aria-label="匯出與分享">
         <div>
           <h2>匯出簡報</h2>
-          <p>下載目前版本，或複製分享連結。</p>
+          <p>下載草稿，或複製已發布版本的公開連結。</p>
         </div>
         <div class="export-actions">
           <button id="btn-optimize" class="outline-button" type="button" disabled><span aria-hidden="true">✦</span>一鍵優化</button>
@@ -139,7 +161,7 @@
           <button id="btn-html" class="outline-button" type="button"><span aria-hidden="true">〈 〉</span>HTML</button>
           <button id="btn-pdf" class="outline-button" type="button"><span aria-hidden="true">↓</span>PDF</button>
           <button id="btn-pptx" class="outline-button" type="button"><span aria-hidden="true">↓</span>PPTX</button>
-          <button id="btn-share" class="outline-button" type="button"><span aria-hidden="true">↗</span>分享</button>
+          <button id="btn-share" class="outline-button" type="button" disabled>複製公開連結</button>
         </div>
       </section>
 

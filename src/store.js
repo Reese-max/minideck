@@ -33,7 +33,7 @@ export async function readQuotaCounts(db, entries) {
 export function getProject(db, id) {
   return db
     .prepare(
-      "SELECT id, brief, access_token_hash, current_version, status FROM projects WHERE id = ?1",
+      "SELECT id, brief, access_token_hash, current_version, published_version, published_at, status FROM projects WHERE id = ?1",
     )
     .bind(id)
     .first();
@@ -58,6 +58,34 @@ export async function releaseProject(db, id) {
     )
     .bind(id)
     .run();
+}
+
+export function deckValidationError(html) {
+  if (typeof html !== "string") return "請提供 HTML 簡報";
+  if (new TextEncoder().encode(html).byteLength > 2 * 1024 * 1024) {
+    return "HTML 簡報不可超過 2MB";
+  }
+  if ((html.match(/<section\s+class=["']slide["'][^>]*>/gi) ?? []).length < 3) {
+    return "HTML 簡報至少需要 3 頁";
+  }
+  if (!/<\/html\s*>/i.test(html)) return "HTML 簡報尚未完成";
+  if ((html.match(/data-gen-prompt\s*=/gi) ?? []).length > 12) {
+    return "HTML 簡報的圖片佔位符不可超過 12 個";
+  }
+  return null;
+}
+
+// Call under claimProject, as with saves and deletion, so validated R2 data stays intact.
+export function setPublishedVersion(db, id, version) {
+  return db
+    .prepare(
+      `UPDATE projects SET published_version = ?2, published_at = ?3
+       WHERE id = ?1 AND (?2 IS NULL OR EXISTS (
+         SELECT 1 FROM versions WHERE project_id = ?1 AND version = ?2
+       )) RETURNING published_version, published_at`,
+    )
+    .bind(id, version, version === null ? null : Date.now())
+    .first();
 }
 
 export async function saveDeckVersion(db, bucket, id, html, origin, revision) {
@@ -224,6 +252,9 @@ export async function readProjectState(db, id) {
 
   return {
     status: project.status,
+    current_version: project.current_version,
+    published_version: project.published_version,
+    published_at: project.published_at,
     versions: versions.results,
     messages: messages.results,
   };
