@@ -555,8 +555,8 @@ async function saveDeck(request, env, id) {
 
   const body = await requestJson(request);
   if (!body) return json({ error: "請提供有效的 JSON 請求" }, 400);
-  const validationError = deckValidationError(body.html);
-  if (validationError) return json({ error: validationError }, validationError.includes("2MB") ? 413 : 400);
+  const validationError = deckValidationError(body.html, { requireComplete: false });
+  if (validationError) return json({ error: validationError.message }, validationError.status);
 
   const claimed = await claimProject(env.DB, id);
   if (claimed === null) return json({ error: "專案不存在" }, 404);
@@ -603,7 +603,7 @@ async function publishProject(request, env, id, unpublish = false) {
       const source = await readDeck(env.DB, env.BUCKET, id, version);
       if (!source.deck) return json({ error: "找不到簡報版本" }, 404);
       const validationError = deckValidationError(await source.deck.object.text());
-      if (validationError) return json({ error: validationError }, 400);
+      if (validationError) return json({ error: validationError.message }, validationError.status);
     }
     const receipt = await setPublishedVersion(env.DB, id, version);
     return receipt ? json(receipt) : json({ error: "找不到簡報版本" }, 404);

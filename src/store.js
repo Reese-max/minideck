@@ -60,17 +60,19 @@ export async function releaseProject(db, id) {
     .run();
 }
 
-export function deckValidationError(html) {
-  if (typeof html !== "string") return "請提供 HTML 簡報";
+export function deckValidationError(html, { requireComplete = true } = {}) {
+  if (typeof html !== "string") return { message: "請提供 HTML 簡報", status: 400 };
   if (new TextEncoder().encode(html).byteLength > 2 * 1024 * 1024) {
-    return "HTML 簡報不可超過 2MB";
+    return { message: "HTML 簡報不可超過 2MB", status: 413 };
   }
   if ((html.match(/<section\s+class=["']slide["'][^>]*>/gi) ?? []).length < 3) {
-    return "HTML 簡報至少需要 3 頁";
+    return { message: "HTML 簡報至少需要 3 頁", status: 400 };
   }
-  if (!/<\/html\s*>/i.test(html)) return "HTML 簡報尚未完成";
+  if (requireComplete && !/<\/html\s*>/i.test(html)) {
+    return { message: "HTML 簡報尚未完成", status: 400 };
+  }
   if ((html.match(/data-gen-prompt\s*=/gi) ?? []).length > 12) {
-    return "HTML 簡報的圖片佔位符不可超過 12 個";
+    return { message: "HTML 簡報的圖片佔位符不可超過 12 個", status: 400 };
   }
   return null;
 }

@@ -97,6 +97,15 @@ test("new projects and saved drafts are private until explicitly published", asy
   assert.equal((await state(id)).current_version, 1);
 });
 
+test("saving preserves the previous incomplete HTML behavior while publish validates completion", async () => {
+  const id = await project();
+  const response = await action(id, "deck", { html: html("INCOMPLETE").replace("</html>", "") });
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { version: 1 });
+  assert.equal((await action(id, "publish", { version: 1 })).status, 400);
+  assert.equal((await state(id)).published_version, null);
+});
+
 test("publish receipts pin the public head across saves and republishing", async () => {
   const id = await project();
   await save(id, "RELEASE_V1");
@@ -227,29 +236,40 @@ test("unpublish revokes anonymous URLs without removing any owner versions", asy
   await publicDeck(id, "DRAFT");
 });
 
-test("concurrent publish/save stays complete and generation locks are respected", async () => {
+test("publish during an in-flight save is rejected before its version exists", async () => {
   const id = await project();
   await save(id, "COMPLETE_ONE");
   await publish(id, 1);
-  const results = await Promise.all([
-    action(id, "deck", { html: html("COMPLETE_TWO") }),
-    action(id, "publish", { version: 1 }),
-  ]);
-  for (const result of results) assert.ok([200, 409].includes(result.status));
-  if (results[0].status === 409) await save(id, "COMPLETE_TWO");
-  if (results[1].status === 409) await publish(id, 1);
+  let enteredPut;
+  const putStarted = new Promise((resolve) => { enteredPut = resolve; });
+  let releasePut;
+  const putGate = new Promise((resolve) => { releasePut = resolve; });
+  const originalPut = bucket.put.bind(bucket);
+  bucket.put = async (key, ...args) => {
+    if (key === `decks/${id}/2.html`) {
+      enteredPut();
+      await putGate;
+    }
+    return originalPut(key, ...args);
+  };
+  try {
+    const saving = action(id, "deck", { html: html("COMPLETE_TWO") });
+    await putStarted;
+    const publishing = await action(id, "publish", { version: 2 });
+    assert.equal(publishing.status, 409);
+    releasePut();
+    const saved = await saving;
+    assert.equal(saved.status, 200);
+  } finally {
+    releasePut();
+    bucket.put = originalPut;
+  }
+  assert.equal((await state(id)).current_version, 2);
+  assert.equal((await state(id)).published_version, 1);
   await publicDeck(id, "COMPLETE_ONE");
-  const race = await Promise.all([
-    action(id, "deck", { html: html("COMPLETE_THREE") }),
-    action(id, "publish", { version: 3 }),
-  ]);
-  assert.ok([200, 409].includes(race[0].status));
-  assert.ok([200, 404, 409].includes(race[1].status));
-  const publicVersion = (await state(id)).published_version;
-  await publicDeck(id, publicVersion === 1 ? "COMPLETE_ONE" : "COMPLETE_THREE");
   await db.prepare("UPDATE projects SET status = 'generating' WHERE id = ?1").bind(id).run();
   for (const name of ["publish", "unpublish"]) assert.equal((await action(id, name, { version: 1 })).status, 409);
-  assert.equal((await state(id)).published_version, publicVersion);
+  assert.equal((await state(id)).published_version, 1);
 });
 
 test("project deletion invalidates public/preview URLs and cleans every deck in R2", async () => {
@@ -275,7 +295,7 @@ test("legacy migration pins only the existing current version and leaves empty p
   await db.prepare("INSERT INTO projects(id, current_version, access_token_hash) VALUES('legacy', 2, ?1), ('empty', 0, ?1), ('missing', 9, ?1)").bind(tokenHash).run();
   await db.prepare("INSERT INTO versions(project_id, version, r2_key) VALUES('legacy', 2, 'decks/legacy/2.html')").run();
   await bucket.put("decks/legacy/2.html", html("LEGACY_RELEASE"));
-  await sql(await readFile(new URL("migrations/0002_published_version.sql", root), "utf8"));
+  await sql(await readFile(new URL("migrations/published/0002_published_version.sql", root), "utf8"));
   const legacy = await state("legacy");
   assert.equal(legacy.current_version, 2);
   assert.equal(legacy.published_version, 2);

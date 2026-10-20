@@ -14,13 +14,13 @@ Cloudflare Worker 上的 MiniMax HTML 簡報生成器。瀏覽器 UI 的建立�
 npx wrangler d1 execute minideck --remote --file migrations/0001_project_access_token.sql
 ```
 
-已具備 token 欄位的既有資料庫，升級本版前另執行一次發布狀態 migration（以下使用本機資料；正式環境由操作者核准後改為 `--remote`）：
+已具備 token 欄位的既有資料庫，使用 Wrangler migration runner 套用發布狀態 migration（以下使用本機資料；正式環境由操作者核准後改為 `--remote`）：
 
 ```bash
-npx wrangler d1 execute minideck --config ./wrangler.toml --local --file migrations/0002_published_version.sql
+npx wrangler d1 migrations apply minideck --config ./wrangler.toml --local
 ```
 
-`0002` 會把每個既有專案當下存在的 `current_version > 0` 固定為 `published_version`，並記錄 migration 時間為 `published_at`，理由是保留已分享連結的內容。空專案或缺少版本資料的專案維持未發布。此為保留既有分享的唯一自動發布例外；之後生成、修訂、儲存及回退均只更新草稿。migration 與新 Worker 必須協調上線，避免舊 Worker 繼續依草稿提供公開內容。全新資料庫直接使用 `schema.sql`；不要對新 schema 或已完成遷移的資料庫重跑此 migration。
+Wrangler 會記錄已套用的 migration，避免 runner 重複執行 `0002`。它會把每個既有專案當下存在的 `current_version > 0` 固定為 `published_version`，並記錄 migration 時間為 `published_at`，理由是保留已分享連結的內容。空專案或缺少版本資料的專案維持未發布。此為保留既有分享的唯一自動發布例外；之後生成、修訂、儲存及回退均只更新草稿。已依舊版指示用 `d1 execute --file` 手動套用 `0002` 的資料庫視為已遷移，勿再執行此 migration。上線期間須暫停舊 Worker 的流量與寫入，套用 migration 後立即部署新 Worker；全新資料庫直接使用 `schema.sql`，不需套用 `0002`。
 
 下列範例以 Git Bash／WSL 的 `curl` 語法表示：
 
