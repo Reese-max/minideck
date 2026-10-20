@@ -74,6 +74,15 @@ export async function claimJobs(
   });
 }
 
+export async function renewJobLease(env: RunnerEnv, job: ClaimedJob): Promise<void> {
+  const result = await callMcpService(env, "/internal/jobs/renew", {
+    jobId: job.id,
+    attemptCount: job.attemptCount,
+  });
+  // Completion may return a terminal fence rejection; renewal must stop work.
+  if (result.error) throw new Error(String(result.error));
+}
+
 export async function completeJob(
   env: RunnerEnv,
   job: ClaimedJob,

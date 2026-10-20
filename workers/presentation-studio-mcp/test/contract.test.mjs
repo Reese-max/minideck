@@ -18,7 +18,7 @@ hooks.deregister();
 const root = new URL("../", import.meta.url);
 
 async function read(relativePath) {
-  return readFile(new URL(relativePath, root), "utf8");
+  return (await readFile(new URL(relativePath, root), "utf8")).replaceAll("\r\n", "\n");
 }
 
 test("exposes exactly the v2 high-level presentation tools", async () => {

@@ -1,7 +1,7 @@
 import { WorkflowEntrypoint } from "cloudflare:workers";
 import type { WorkflowEvent, WorkflowStep } from "cloudflare:workers";
 import { getContainer } from "@cloudflare/containers";
-import { completeFailure, completeJob } from "./mcp-service";
+import { completeFailure, completeJob, renewJobLease } from "./mcp-service";
 import { loadJobInput } from "./input";
 import { DashiContainer } from "./container";
 import { runJudges } from "./judges";
@@ -17,6 +17,12 @@ const RETRIES = {
   backoff: "exponential" as const,
 };
 
+// Pin the existing Workflow defaults so the lease horizon includes both reports.
+const COMPLETION_OPTIONS = {
+  retries: { limit: 5, delay: "10 seconds" as const, backoff: "exponential" as const },
+  timeout: "10 minutes" as const,
+};
+
 function isObject(value: unknown): value is JsonObject {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
@@ -24,22 +30,26 @@ function isObject(value: unknown): value is JsonObject {
 export class PresentationWorkflow extends WorkflowEntrypoint<RunnerEnv, WorkflowParams> {
   async run(event: Readonly<WorkflowEvent<WorkflowParams>>, step: WorkflowStep): Promise<unknown> {
     const job = event.payload.job;
+    const withLease = <T>(work: () => Promise<T>) => async (): Promise<T> => {
+      await renewJobLease(this.env, job);
+      return work();
+    };
     let result: DashiJobResult | null = null;
     try {
       if (job.type === "plan") {
         result = (await step.do(
           `plan presentation job ${job.id}`,
           { retries: RETRIES, timeout: "10 minutes" },
-          async () => runPlanner(this.env, job) as any,
+          withLease(async () => runPlanner(this.env, job) as any),
         )) as DashiJobResult;
-        return step.do(`complete planned job ${job.id}`, async () => {
+        return await step.do(`complete planned job ${job.id}`, COMPLETION_OPTIONS, withLease(async () => {
           return completeJob(this.env, job, result!) as any;
-        });
+        }));
       }
       let input = (await step.do(
         `load dashi job ${job.id}`,
         { retries: RETRIES, timeout: "5 minutes" },
-        async () => loadJobInput(this.env, job) as any,
+        withLease(async () => loadJobInput(this.env, job) as any),
       )) as DashiJobInput;
       const initialBoundary = checkClaimBoundary(input.spec, input.sourceMap, [
         input.profile,
@@ -68,7 +78,7 @@ export class PresentationWorkflow extends WorkflowEntrypoint<RunnerEnv, Workflow
           const revisionPlan = await step.do(
             `plan revision for job ${job.id}`,
             { retries: RETRIES, timeout: "10 minutes" },
-            async () => runRevisionPlanner(this.env, input) as any,
+            withLease(async () => runRevisionPlanner(this.env, input) as any),
           ) as Awaited<ReturnType<typeof runRevisionPlanner>>;
           if (revisionPlan.status !== "succeeded" || !revisionPlan.specPatch) {
             result = {
@@ -107,13 +117,13 @@ export class PresentationWorkflow extends WorkflowEntrypoint<RunnerEnv, Workflow
         result = (await step.do(
           `execute dashi job ${job.id}`,
           { retries: RETRIES, timeout: "35 minutes" },
-          async () => {
+          withLease(async () => {
             const container = getContainer<DashiContainer>(
               this.env.DASHI_CONTAINER,
               `presentation-job-${job.id}-attempt-${job.attemptCount}`,
             );
             return container.runJob(executionInput) as any;
-          },
+          }),
         )) as DashiJobResult;
       }
       if (result?.status === "succeeded" && result.version) {
@@ -132,7 +142,7 @@ export class PresentationWorkflow extends WorkflowEntrypoint<RunnerEnv, Workflow
               (await step.do(
                 `judge dashi job ${job.id}`,
                 { retries: RETRIES, timeout: "10 minutes" },
-                async () => runJudges(this.env, executionInput, rendererResult) as any,
+                withLease(async () => runJudges(this.env, executionInput, rendererResult) as any),
               )) as DashiJobResult,
           );
           result = judged ?? {
@@ -142,14 +152,13 @@ export class PresentationWorkflow extends WorkflowEntrypoint<RunnerEnv, Workflow
           };
         }
       }
+      return await step.do(`complete dashi job ${job.id}`, COMPLETION_OPTIONS, withLease(async () => {
+        return completeJob(this.env, job, result!) as any;
+      }));
     } catch (error) {
-      return step.do(`record failed job ${job.id}`, async () => {
+      return step.do(`record failed job ${job.id}`, COMPLETION_OPTIONS, withLease(async () => {
         return completeFailure(this.env, job, error) as any;
-      });
+      }));
     }
-
-    return step.do(`complete dashi job ${job.id}`, async () => {
-      return completeJob(this.env, job, result!) as any;
-    });
   }
 }

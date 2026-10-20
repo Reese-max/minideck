@@ -9,7 +9,7 @@ const hooks = registerHooks({ resolve(specifier, context, nextResolve) {
   if (specifier === "@cloudflare/containers") source = "export class Container {} export const getContainer=()=>globalThis.__revisionRuntime.container;";
   if (context.parentURL?.endsWith("/workflow.ts")) {
     if (specifier === "./input") source = "export const loadJobInput=async()=>structuredClone(globalThis.__revisionRuntime.input);";
-    if (specifier === "./mcp-service") source = "export const completeJob=async(_env,_job,result)=>globalThis.__revisionRuntime.complete(result); export const completeFailure=async(_env,_job,error)=>{throw error};";
+    if (specifier === "./mcp-service") source = "export const renewJobLease=async()=>{globalThis.__revisionRuntime.renewals++;}; export const completeJob=async(_env,_job,result)=>globalThis.__revisionRuntime.complete(result); export const completeFailure=async(_env,_job,error)=>{throw error};";
     if (specifier === "./judges") source = "export const runJudges=async(_env,_input,result)=>{globalThis.__revisionRuntime.judges++; return result};";
   }
   if (source) return { url: dataModule(source), shortCircuit: true };
@@ -23,7 +23,7 @@ async function run(patch, { planner = false, scope = ["s1"] } = {}) {
   const spec = { slides: [{ id:"s1",keyMessage:"Original one" },{ id:"s2",keyMessage:"Original two" }] };
   const input = { type:"revision",jobId:"runtime-revision",projectId:"runtime-project",spec,sourceMap:{claims:[]},sources:[],profile:{},
     payload:planner?{instruction:"Synthetic targeted revision"}:{specPatch:patch}, changedSlides:scope, parentVersionId:"v1" };
-  const state = { input, renders:[],judges:0,completions:[],provider:0,
+  const state = { input, renders:[],judges:0,completions:[],provider:0,renewals:0,
     container:{async runJob(value) {state.renders.push(structuredClone(value)); return {status:"succeeded",jobId:value.jobId,
       version:{spec:value.spec,changedSlides:value.changedSlides,parentVersionId:value.parentVersionId,audit:{deterministic:{claimIntegrity:true}}}};}},
     complete(result) {state.completions.push(structuredClone(result));return result;} };
@@ -36,6 +36,7 @@ async function run(patch, { planner = false, scope = ["s1"] } = {}) {
     const workflow = new PresentationWorkflow({},env);
     const step = {async do(_name,...args) {return args.at(-1)();}};
     const result = await workflow.run({payload:{job:{id:input.jobId,type:"revision"}}},step);
+    assert.ok(state.renewals > 0, "Workflow renews before executing work");
     assert.deepEqual(input.spec,spec,"stored source fixture remains unchanged");
     return {state,result,spec};
   } finally {globalThis.fetch=original;delete globalThis.__revisionRuntime;}
