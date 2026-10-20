@@ -417,9 +417,9 @@ test("runner process blocks sensitive claim bindings before any side effect", ()
   );
 });
 
-test("completion and workflow-failure reports carry the claim attempt fence", async () => {
+test("renewal, completion and workflow-failure reports carry the claim attempt fence", async () => {
   const source = await read("src/mcp-service.ts");
-  assert.equal([...source.matchAll(/attemptCount: job\.attemptCount/g)].length, 2);
+  assert.equal([...source.matchAll(/attemptCount: job\.attemptCount/g)].length, 3);
   assert.match(source, /typeof value\.attemptCount === "number"/);
   const workflow = await read("src/workflow.ts");
   assert.match(workflow, /presentation-job-\$\{job\.id\}-attempt-\$\{job\.attemptCount\}/);
