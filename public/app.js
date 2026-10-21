@@ -185,6 +185,12 @@
     rollback(id, version) {
       return jsonRequest(`/api/projects/${id}/rollback`, { version }, id);
     },
+    publish(id, version) {
+      return jsonRequest(`/api/projects/${id}/publish`, { version }, id);
+    },
+    unpublish(id) {
+      return jsonRequest(`/api/projects/${id}/unpublish`, {}, id);
+    },
     judge(id, version) {
       return jsonRequest(`/api/projects/${id}/judge`, { version }, id);
     },
@@ -710,9 +716,25 @@
     }).format(new Date(createdAt));
   }
 
-  function renderVersions(id, versions) {
+  function renderVersions(id, project) {
+    const versions = project.versions ?? [];
+    const currentVersion = Number(project.current_version ?? 0);
+    const publishedVersion = project.published_version ?? null;
     const rows = versionList.querySelector(".version-rows");
     rows.replaceChildren();
+
+    const status = document.createElement("p");
+    status.className = "version-status";
+    const unpublished =
+      publishedVersion === null
+        ? versions.length
+        : Math.max(0, currentVersion - publishedVersion);
+    status.textContent = publishedVersion === null
+      ? `草稿 v${currentVersion} · 尚未發布`
+      : `公開 v${publishedVersion} · 草稿 v${currentVersion}` +
+        (unpublished ? ` · ${unpublished} 版未發布` : "");
+    rows.append(status);
+
     if (!versions.length) {
       const empty = document.createElement("p");
       empty.className = "version-empty";
@@ -726,7 +748,8 @@
       row.className = "version-row";
       const meta = document.createElement("div");
       const title = document.createElement("strong");
-      title.textContent = `v${item.version} · ${originLabels[item.origin] ?? item.origin}（${item.origin}）`;
+      title.textContent = `v${item.version} · ${originLabels[item.origin] ?? item.origin}（${item.origin}）` +
+        (item.version === publishedVersion ? "（公開中）" : "");
       const time = document.createElement("time");
       time.dateTime = new Date(item.created_at).toISOString();
       time.textContent = formatTime(item.created_at);
@@ -750,7 +773,7 @@
             `version=${result.version}`,
           );
           const project = await MD.api.getProject(id);
-          renderVersions(id, project.versions);
+          renderVersions(id, project);
           await loadPreview(id, result.version);
           currentProjectId = id;
           await auditAndFix(id, false);
@@ -761,14 +784,37 @@
           });
         }
       });
-      row.append(meta, button);
+      const publishButton = document.createElement("button");
+      publishButton.className = "outline-button version-publish";
+      publishButton.type = "button";
+      publishButton.textContent =
+        item.version === publishedVersion ? "取消公開" : "發布";
+      publishButton.addEventListener("click", async () => {
+        versionList.querySelectorAll("button").forEach((target) => {
+          target.disabled = true;
+        });
+        try {
+          if (item.version === publishedVersion) {
+            await MD.api.unpublish(id);
+          } else {
+            await MD.api.publish(id, item.version);
+          }
+          await refreshVersions(id);
+        } catch (error) {
+          showError(error);
+          versionList.querySelectorAll("button").forEach((target) => {
+            target.disabled = false;
+          });
+        }
+      });
+      row.append(meta, button, publishButton);
       rows.append(row);
     }
   }
 
   async function refreshVersions(id) {
     const project = await MD.api.getProject(id);
-    renderVersions(id, project.versions);
+    renderVersions(id, project);
     iteratePanel.querySelector(".iterate-quota").textContent = `已用修訂額度 ${reviseQuotaUsed(project)} / 6`;
     return project;
   }
@@ -941,6 +987,12 @@ html,body{margin:0!important;padding:0!important;background:#fff!important}
 
     async share() {
       if (!currentProjectId) throw new Error("目前沒有可分享的簡報");
+      // /p/:id 只公開「已發布」版本；分享前先確保公開 head 指向目前預覽版本
+      const project = await MD.api.getProject(currentProjectId);
+      if (project.published_version !== currentDeckVersion) {
+        await MD.api.publish(currentProjectId, currentDeckVersion);
+        await refreshVersions(currentProjectId);
+      }
       const url = `${location.origin}/p/${currentProjectId}`;
       await navigator.clipboard.writeText(url);
       return url;

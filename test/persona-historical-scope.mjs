@@ -197,6 +197,20 @@ try {
   assert.deepEqual(await saveV2Res.json(), { version: 2 });
 
   // 4. Test Scenario: Unrelated anonymous recipient views the normal shared link /p/<id>
+  // issue #4：公開前需明確 publish；此處 owner 發布 v2，模擬分享情境
+  const publishV2Res = await worker.fetch(
+    new Request(`https://minideck.test/api/projects/${projectId}/publish`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "X-Project-Token": projectToken,
+      },
+      body: JSON.stringify({ version: 2 }),
+    }),
+    mockEnv,
+  );
+  assert.equal(publishV2Res.status, 200);
+
   const anonPlayerRes = await worker.fetch(
     new Request(`https://minideck.test/p/${projectId}`),
     mockEnv,
@@ -234,7 +248,7 @@ try {
   assert.equal(anonPlayerV1Res.status, 403);
   console.log("PASS 匿名存取歷史播放頁 /p/:id?version=1 被拒絕 (403)");
 
-  // 8. Test: Anonymous caller visits /p/:id?version=2 (matching current_version)
+  // 8. Test: Anonymous caller visits /p/:id?version=2 (matching published_version)
   const anonPlayerV2Res = await worker.fetch(
     new Request(`https://minideck.test/p/${projectId}?version=2`),
     mockEnv,
@@ -266,7 +280,7 @@ try {
   assert.match(ownerV2Html, /公司估值公開版/);
   console.log("PASS 擁有者使用 X-Project-Token 可正常讀取版本 v2");
 
-  // 10. Test: Rollback does not silently expose unintended historical versions
+  // 10. Test: Rollback creates a draft; public head stays on the published version
   const rollbackRes = await worker.fetch(
     new Request(`https://minideck.test/api/projects/${projectId}/rollback`, {
       method: "POST",
@@ -281,27 +295,30 @@ try {
   assert.equal(rollbackRes.status, 200);
   assert.deepEqual(await rollbackRes.json(), { version: 3 });
 
-  // Anonymous user accessing /p/:id now sees v3 (rolled-back to v1)
+  // issue #4：rollback 產生的 v3 是草稿；匿名 /p/:id 仍看已發布的 v2，
+  // 草稿（含 v1 機密）不會因 rollback 被公開
   const anonRolledRes = await worker.fetch(
     new Request(`https://minideck.test/p/${projectId}`),
     mockEnv,
   );
   assert.equal(anonRolledRes.status, 200);
-  assert.match(await anonRolledRes.text(), new RegExp(DRAFT_SECRET));
+  const anonRolledHtml = await anonRolledRes.text();
+  assert.match(anonRolledHtml, /公司估值公開版/);
+  assert.doesNotMatch(anonRolledHtml, new RegExp(DRAFT_SECRET));
 
-  // Anonymous user cannot access superseded version v2
-  const anonV2DeckRes = await worker.fetch(
-    new Request(`https://minideck.test/api/projects/${projectId}/deck?version=2`),
+  // Anonymous user cannot access the rolled-back draft v3
+  const anonV3DeckRes = await worker.fetch(
+    new Request(`https://minideck.test/api/projects/${projectId}/deck?version=3`),
     mockEnv,
   );
-  assert.equal(anonV2DeckRes.status, 403);
+  assert.equal(anonV3DeckRes.status, 403);
 
-  const anonPlayerV2AfterRollback = await worker.fetch(
-    new Request(`https://minideck.test/p/${projectId}?version=2`),
+  const anonPlayerV3AfterRollback = await worker.fetch(
+    new Request(`https://minideck.test/p/${projectId}?version=3`),
     mockEnv,
   );
-  assert.equal(anonPlayerV2AfterRollback.status, 403);
-  console.log("PASS 回退至 v1 後，被取代的歷史版本 v2 仍嚴格受保護 (403)");
+  assert.equal(anonPlayerV3AfterRollback.status, 403);
+  console.log("PASS rollback 產生的草稿 v3 不自動公開；匿名仍看已發布的 v2");
 
   // 11. Test: Revocation & Deletion semantics
   const deleteRes = await worker.fetch(
