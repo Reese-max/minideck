@@ -112,3 +112,16 @@ test("a closed preview's delayed response cannot overwrite a newly opened previe
   await oldPreview;
   assert.equal(ui.node("#player-preview iframe").html, "<html>new preview</html>");
 });
+
+test("owner preview lets the trusted player access slides while deck scripts stay blocked", async () => {
+  const [editor, player] = await Promise.all([
+    readFile(new URL("../public/index.html", import.meta.url), "utf8"),
+    readFile(new URL("../public/play.html", import.meta.url), "utf8"),
+  ]);
+  const previewFrame = editor.match(/<iframe\b[^>]*title="公開播放器預覽"[^>]*>/i)?.[0] ?? "";
+  assert.match(previewFrame, /\bsandbox="[^"]*\ballow-scripts\b/);
+  assert.match(previewFrame, /\bsandbox="[^"]*\ballow-same-origin\b/, "opaque ancestor sandbox prevents the player from reading its deck DOM");
+  const deckFrame = player.match(/<iframe\b[^>]*id="play-deck"[^>]*>/i)?.[0] ?? "";
+  assert.match(deckFrame, /\bsandbox="allow-same-origin"/);
+  assert.doesNotMatch(deckFrame, /allow-scripts/);
+});

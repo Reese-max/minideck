@@ -192,7 +192,7 @@ curl -sS -X DELETE "$BASE/api/projects/$PROJECT_ID" \
 
 ### 6. 預覽與下線
 
-UI「發布與分享」會顯示草稿 head、公開 head 與未發布變更數。「發布前預覽」與版本歷史的「預覽」都透過帶權杖的 preview API 載入同一公開播放器；預覽不會改變發布狀態，也不產生可永久公開的預覽網址。「發布 vN」與「下線」需要明確點擊；複製公開連結只在專案已發布時可用。
+UI「發布與分享」會顯示草稿 head、公開 head 與未發布變更數。「發布前預覽」與版本歷史的「預覽」都透過帶權杖的 preview API 載入同一公開播放器；可信任的播放器外框具有操作投影片 DOM 所需的腳本與同源權限，內層 deck 仍禁止腳本。預覽不會改變發布狀態，也不產生可永久公開的預覽網址。「發布 vN」與「下線」需要明確點擊；複製公開連結只在專案已發布時可用。
 
 ```bash
 # 以實際公開 renderer 預覽草稿 v2；權杖僅放 header，不放網址。
@@ -214,7 +214,7 @@ npm run check
 npx wrangler deploy --config ./wrangler.toml --dry-run --outdir .wrangler/issue-4-build
 ```
 
-`npm run check` 保留全部既有測試，另執行 12 項實際本機 workerd／D1／R2 測試與 3 項 UI 狀態回歸。Miniflare 使用已宣告 Wrangler 的鎖定依賴；fixture 與 provider 回應全部在本機隔離，不使用正式資料、Secrets 或付費 AI。
+`npm run check` 保留全部既有測試，另執行 13 項實際本機 workerd／D1／R2 測試與 4 項 UI 回歸。並行測試透過測試 Worker 的 service binding 暫停實際 R2 上傳，驗證完整上傳前不能發布；測試設有 10 秒上限。Miniflare 使用已宣告 Wrangler 的鎖定依賴；fixture 與 provider 回應全部在本機隔離，不使用正式資料、Secrets 或付費 AI。
 
 | Issue #4 驗收條件 | 實作與驗證 |
 |---|---|

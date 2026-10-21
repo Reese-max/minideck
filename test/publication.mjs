@@ -10,9 +10,10 @@ const schema = await readFile(new URL("schema.sql", root), "utf8");
 const template = await readFile(new URL("public/play.html", root), "utf8");
 let generatedHtml;
 let providerCalls = 0;
+let beforePut;
 const mf = new Miniflare({
   modules: true,
-  scriptPath: fileURLToPath(new URL("src/worker.js", root)),
+  scriptPath: fileURLToPath(new URL("test/fixtures/publication-worker.js", root)),
   modulesRoot: fileURLToPath(root),
   modulesRules: [
     { type: "ESModule", include: ["**/*.js"] },
@@ -25,7 +26,13 @@ const mf = new Miniflare({
     MINIMAX_API_KEY: "fixture-only", LIMIT_GLOBAL_TEXT: "100",
     LIMIT_PROJECT_REVISES: "20", LIMIT_PROJECT_RETRIES: "2",
   },
-  serviceBindings: { ASSETS: () => new Response(template) },
+  serviceBindings: {
+    ASSETS: () => new Response(template),
+    BEFORE_PUT: async (request) => {
+      await beforePut?.(decodeURIComponent(new URL(request.url).pathname.slice(1)));
+      return new Response(null, { status: 204 });
+    },
+  },
   outboundService: (request) => {
     assert.equal(new URL(request.url).hostname, "api.minimax.io");
     providerCalls++;
@@ -172,9 +179,14 @@ test("publish rejects missing, foreign, deleted and invalid stored versions", as
   await publish(id, 1);
   await save(id, "INVALID");
   const key = `decks/${id}/2.html`;
-  for (const invalid of ["<html>incomplete</html>", html("x").replace("</html>", ""), html("x") + '<img data-gen-prompt="x">'.repeat(13), html("x".repeat(2 * 1024 * 1024))]) {
+  for (const [invalid, status] of [
+    ["<html>incomplete</html>", 400],
+    [html("x").replace("</html>", ""), 400],
+    [html("x") + '<img data-gen-prompt="x">'.repeat(13), 400],
+    [html("x".repeat(2 * 1024 * 1024)), 413],
+  ]) {
     await bucket.put(key, invalid);
-    assert.equal((await action(id, "publish", { version: 2 })).status, 400);
+    assert.equal((await action(id, "publish", { version: 2 })).status, status);
     assert.equal((await state(id)).published_version, 1);
     assert.equal((await state(id)).status, "ready");
   }
@@ -236,7 +248,7 @@ test("unpublish revokes anonymous URLs without removing any owner versions", asy
   await publicDeck(id, "DRAFT");
 });
 
-test("publish during an in-flight save is rejected before its version exists", async () => {
+test("publish during an in-flight save is rejected before its version exists", { timeout: 10000 }, async () => {
   const id = await project();
   await save(id, "COMPLETE_ONE");
   await publish(id, 1);
@@ -244,17 +256,18 @@ test("publish during an in-flight save is rejected before its version exists", a
   const putStarted = new Promise((resolve) => { enteredPut = resolve; });
   let releasePut;
   const putGate = new Promise((resolve) => { releasePut = resolve; });
-  const originalPut = bucket.put.bind(bucket);
-  bucket.put = async (key, ...args) => {
+  beforePut = async (key) => {
     if (key === `decks/${id}/2.html`) {
       enteredPut();
       await putGate;
     }
-    return originalPut(key, ...args);
   };
   try {
     const saving = action(id, "deck", { html: html("COMPLETE_TWO") });
     await putStarted;
+    assert.equal((await state(id)).current_version, 1);
+    assert.equal(await db.prepare("SELECT version FROM versions WHERE project_id = ?1 AND version = 2").bind(id).first(), null);
+    await publicDeck(id, "COMPLETE_ONE");
     const publishing = await action(id, "publish", { version: 2 });
     assert.equal(publishing.status, 409);
     releasePut();
@@ -262,7 +275,7 @@ test("publish during an in-flight save is rejected before its version exists", a
     assert.equal(saved.status, 200);
   } finally {
     releasePut();
-    bucket.put = originalPut;
+    beforePut = undefined;
   }
   assert.equal((await state(id)).current_version, 2);
   assert.equal((await state(id)).published_version, 1);
