@@ -9,7 +9,7 @@ const hooks = registerHooks({ resolve(specifier, context, nextResolve) {
   if (specifier === "@cloudflare/containers") source = "export class Container {} export const getContainer=()=>globalThis.__revisionRuntime.container;";
   if (context.parentURL?.endsWith("/workflow.ts")) {
     if (specifier === "./input") source = "export const loadJobInput=async()=>structuredClone(globalThis.__revisionRuntime.input);";
-    if (specifier === "./mcp-service") source = "export const completeJob=async(_env,_job,result)=>globalThis.__revisionRuntime.complete(result); export const completeFailure=async(_env,_job,error)=>{throw error};";
+    if (specifier === "./mcp-service") source = "export const renewJob=async(_env,job,seconds)=>globalThis.__revisionRuntime.renew(job,seconds); export const completeJob=async(_env,_job,result)=>globalThis.__revisionRuntime.complete(result); export const completeFailure=async(_env,_job,error)=>{throw error};";
     if (specifier === "./judges") source = "export const runJudges=async(_env,_input,result)=>{globalThis.__revisionRuntime.judges++; return result};";
   }
   if (source) return { url: dataModule(source), shortCircuit: true };
@@ -26,6 +26,7 @@ async function run(patch, { planner = false, scope = ["s1"] } = {}) {
   const state = { input, renders:[],judges:0,completions:[],provider:0,
     container:{async runJob(value) {state.renders.push(structuredClone(value)); return {status:"succeeded",jobId:value.jobId,
       version:{spec:value.spec,changedSlides:value.changedSlides,parentVersionId:value.parentVersionId,audit:{deterministic:{claimIntegrity:true}}}};}},
+    renew(job,seconds) {assert.equal(job.attemptCount,1); assert.ok([300,600,2100].includes(seconds));},
     complete(result) {state.completions.push(structuredClone(result));return result;} };
   const original = globalThis.fetch;
   globalThis.__revisionRuntime = state;
@@ -35,7 +36,7 @@ async function run(patch, { planner = false, scope = ["s1"] } = {}) {
     const env = {CF_AI_ROUTER_URL:"https://synthetic-planner.invalid/",CF_AI_ROUTER_API_KEY:"synthetic-test-value"};
     const workflow = new PresentationWorkflow({},env);
     const step = {async do(_name,...args) {return args.at(-1)();}};
-    const result = await workflow.run({payload:{job:{id:input.jobId,type:"revision"}}},step);
+    const result = await workflow.run({payload:{job:{id:input.jobId,type:"revision",attemptCount:1}}},step);
     assert.deepEqual(input.spec,spec,"stored source fixture remains unchanged");
     return {state,result,spec};
   } finally {globalThis.fetch=original;delete globalThis.__revisionRuntime;}

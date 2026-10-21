@@ -47,11 +47,13 @@ quality contract, including a visualCoverage receipt whose evaluated slide ids
 must exactly match the version's slide set — a deck whose visual Judge saw only
 a subset of slides cannot be approved.
 
-The runner-only endpoints are POST /internal/jobs/claim and
-POST /internal/jobs/complete. They require the PRESENTATION_RUNNER_TOKEN
-Bearer secret and are not registered as MCP tools. Claim leases expire after
-60 minutes so the Workflow/Container execution window cannot create duplicate
-work; completion accepts only constrained render/export result shapes.
+The runner-only endpoints are POST /internal/jobs/claim,
+POST /internal/jobs/renew, and POST /internal/jobs/complete. They require the
+PRESENTATION_RUNNER_TOKEN Bearer secret and are not registered as MCP tools.
+Claim leases start at 60 minutes. Before each Workflow callback and retry,
+the runner renews only its current, unexpired attempt within finite attempt
+horizons; see [bounded lease renewal](../../docs/lease-renewal.md).
+Completion accepts only constrained render/export result shapes.
 
 ## Local checks
 

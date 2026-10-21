@@ -318,8 +318,11 @@ test("wires integrity preflight before render, revision planning, and Judges", a
   );
   assert.ok(
     workflow.indexOf("const initialBoundary = checkClaimBoundary") <
-      workflow.indexOf("async () => runRevisionPlanner(this.env, input)"),
+      workflow.indexOf("return runRevisionPlanner(this.env, input)"),
   );
+  assert.ok(workflow.indexOf("const initialBoundary = checkClaimBoundary") >= 0);
+  assert.ok(workflow.indexOf("return runRevisionPlanner(this.env, input)") >= 0);
+  assert.match(workflow, /await renewJob\(this\.env, job, 600\);\s*return runRevisionPlanner\(this\.env, input\)/);
   assert.ok(workflow.indexOf("const boundary = checkClaimBoundary") < workflow.indexOf("container.runJob(executionInput)"));
   assert.ok(planner.indexOf("runWithClaimBoundary") < planner.indexOf("fetch(endpoint"));
   assert.ok(reviser.indexOf("runWithClaimBoundary(input") < reviser.indexOf("fetch(endpoint"));
@@ -419,7 +422,10 @@ test("runner process blocks sensitive claim bindings before any side effect", ()
 
 test("completion and workflow-failure reports carry the claim attempt fence", async () => {
   const source = await read("src/mcp-service.ts");
-  assert.equal([...source.matchAll(/attemptCount: job\.attemptCount/g)].length, 2);
+  const reports = source.slice(source.indexOf("export async function completeJob("));
+  assert.equal([...reports.matchAll(/attemptCount: job\.attemptCount/g)].length, 2);
+  assert.equal([...source.matchAll(/attemptCount: job\.attemptCount/g)].length, 3);
+  assert.match(source, /"\/internal\/jobs\/renew",\s*\{\s*jobId: job\.id,\s*attemptCount: job\.attemptCount/);
   assert.match(source, /typeof value\.attemptCount === "number"/);
   const workflow = await read("src/workflow.ts");
   assert.match(workflow, /presentation-job-\$\{job\.id\}-attempt-\$\{job\.attemptCount\}/);
