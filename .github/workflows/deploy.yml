@@ -16,11 +16,12 @@ jobs:
           node-version: "22"
           cache: npm
       - run: npm ci
+      - run: npm ci --prefix workers/presentation-studio-mcp
       - run: npm run check
 
   deploy-preview:
     needs: check
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' && github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
