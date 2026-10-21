@@ -1,0 +1,12 @@
+{
+  "repo": "Reese-max/minideck",
+  "issue": 34,
+  "base_sha": "acacf18a2d6e9bce08568433874e99d69ed3ab5f",
+  "red_proof": "Before fixes: node --test --test-timeout=10000 --test-name-pattern='trusted player|publish rejects|publish during' test/publication-ui.mjs test/publication.mjs exited 1: 3 selected, pass 0, fail 2, cancelled 1. New trusted-player regression failed because preview iframe lacked allow-same-origin; stored oversized HTML failed with 413 !== 400 at original test/publication.mjs:177; original Node-side R2 gate timed out after 10000ms. Chromium also failed the nested-player fixture before fixes: Preview renderer cannot navigate three script-blocked slides.",
+  "test_command": "npm run check",
+  "test_exit": 0,
+  "tests_passed": 17,
+  "tests_failed": 0,
+  "summary": "PR #34 自我審查修正 1 high、2 med、1 low：可信任 preview renderer 可操作投影片 DOM，內層 deck 繼續禁止腳本；過大 HTML 精確斷言既有 413；測試 Worker 以 service binding 暫停真實 R2 上傳，並行發布回 409、未完成版本不存在且公開內容維持舊版；README 更新為 13 runtime + 4 UI。三項定向回歸由紅轉綠；npm run check 的全部既有 assertion scripts 與 17 項 publication 測試通過。Wrangler 4.115.0 deploy --dry-run exit 0。Chromium 本機巢狀播放器 fixture 驗證 1/3 -> 2/3 -> 3/3、單一 active slide、deckScriptRan=false。",
+  "not_done": "未 push、未操作其他分支、未修改外部 PR／issue、未執行遠端 CI、遠端 Preview／Production 部署或正式 migration。瀏覽器驗證使用實際 player HTML 與 preview iframe sandbox 的本機 fixture，未宣稱已部署環境或完整 editor E2E 驗收。專案無獨立 lint／typecheck 指令，未新增品質工具或套件。"
+}

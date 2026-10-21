@@ -1,0 +1,32 @@
+{
+  "pr": 34,
+  "head": "acacf18a2d6e9bce08568433874e99d69ed3ab5f",
+  "findings": [
+    {
+      "severity": "high",
+      "file": "public/index.html",
+      "line": 150,
+      "issue": "Owner preview 的 sandbox 只有 allow-scripts；其不透明來源限制會繼承至 play-deck，讓 public/play.html 讀取 contentDocument 時取得 null。真實瀏覽器預覽停在 1 / 1，無法切頁或縮放；可信任的 renderer 外框需要同源權限，內層 deck 必須繼續禁止腳本。"
+    },
+    {
+      "severity": "med",
+      "file": "test/publication.mjs",
+      "line": 177,
+      "issue": "過大 HTML fixture 超過既有 2 MB 上限，endpoint 正確回傳 413，測試卻一律要求 400，造成 npm run check 必定失敗。應逐筆斷言正確的 HTTP 狀態並保留發布狀態未改變的檢查。"
+    },
+    {
+      "severity": "med",
+      "file": "test/publication.mjs",
+      "line": 246,
+      "issue": "Node 端修改 getR2Bucket() 回傳物件的 put 不會攔截 workerd 內的 R2 binding；putStarted 永遠無法完成，並行測試卡住且後續驗收未執行。應在測試 Worker 入口攔截實際 R2 put，並限制測試等待時間。"
+    },
+    {
+      "severity": "low",
+      "file": "README.md",
+      "line": 216,
+      "issue": "文件記錄 12 項 publication runtime 測試，但受審版本實際有 13 項；原 evidence 的測試數與通過宣稱也不符可重現結果，需以本次實測重寫。"
+    }
+  ],
+  "fixed": true,
+  "summary": "已修正 owner preview 的巢狀 sandbox，保留內層 deck 腳本封鎖，並更正 413 斷言、實際 workerd R2 並行閘門及測試數文件。回歸先紅後綠：13 項 runtime 與 4 項 UI 測試全過，既有測試與 Wrangler dry-run 通過，瀏覽器三頁鍵盤切換及 deck 腳本封鎖也通過。變更僅作本機 commit，未 push 或部署。"
+}
