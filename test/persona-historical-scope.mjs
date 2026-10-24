@@ -13,6 +13,7 @@ function createD1() {
     if (trimmed) db.exec(trimmed);
   }
 
+  let failGlobalTextInsert = false;
   return {
     prepare(sql) {
       let bound = [];
@@ -30,6 +31,13 @@ function createD1() {
           return { results: stmt.all(...bound) };
         },
         async run() {
+          if (
+            failGlobalTextInsert &&
+            sql.includes("INSERT INTO quotas") &&
+            bound[0] === "global:text"
+          ) {
+            throw new Error("d1 quota write failed");
+          }
           const stmt = db.prepare(sql);
           const info = stmt.run(...bound);
           return { meta: { changes: Number(info.changes) } };
@@ -42,6 +50,9 @@ function createD1() {
         results.push(await stmt.all());
       }
       return results;
+    },
+    setFailGlobalTextInsert(value) {
+      failGlobalTextInsert = value;
     },
   };
 }
@@ -328,6 +339,62 @@ try {
   );
   assert.equal(deletedDeckRes.status, 404);
   console.log("PASS 專案刪除後公開播放頁與歷史簡報皆立即失效 (404)");
+
+  // Regression (#39): 額度寫入例外後專案不得卡在 generating，DELETE 與再次生成皆須可行。
+  const failDb = createD1();
+  const failBucket = createBucket();
+  const failEnv = { ...mockEnv, DB: failDb, BUCKET: failBucket };
+
+  const failCreateRes = await worker.fetch(
+    new Request("https://minideck.test/api/projects", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "CF-Connecting-IP": "2001:db8::1",
+      },
+      body: JSON.stringify({
+        brief: "額度寫入失敗釋放鎖定回歸測試",
+        turnstileToken: "valid-token",
+      }),
+    }),
+    failEnv,
+  );
+  assert.equal(failCreateRes.status, 200);
+  const { id: failId, token: failToken } = await failCreateRes.json();
+
+  failDb.setFailGlobalTextInsert(true);
+  const failGenerateRes = await worker.fetch(
+    new Request(`https://minideck.test/api/projects/${failId}/generate`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "X-Project-Token": failToken,
+      },
+    }),
+    failEnv,
+  );
+  assert.equal(failGenerateRes.status, 500);
+
+  const failStateRes = await worker.fetch(
+    new Request(`https://minideck.test/api/projects/${failId}`, {
+      headers: { "X-Project-Token": failToken },
+    }),
+    failEnv,
+  );
+  assert.equal(failStateRes.status, 200);
+  const failState = await failStateRes.json();
+  assert.notEqual(failState.status, "generating", "專案不得停留在 generating");
+
+  const failDeleteRes = await worker.fetch(
+    new Request(`https://minideck.test/api/projects/${failId}`, {
+      method: "DELETE",
+      headers: { "X-Project-Token": failToken },
+    }),
+    failEnv,
+  );
+  assert.equal(failDeleteRes.status, 200);
+  assert.deepEqual(await failDeleteRes.json(), { deleted: true, cleanupPending: 0 });
+  console.log("PASS 額度寫入例外後專案不卡在 generating，DELETE 可成功");
 
   console.log("ALL PERSONA C04 / J04 ACCEPTANCE CRITERIA PASSED");
 } finally {
