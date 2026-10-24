@@ -279,10 +279,17 @@ async function generateDeck(request, env, ctx, id) {
   if (!claimed) return json({ error: "專案正在生成中" }, 409);
 
   const project = access.project;
-  const day = await reserveText(env, id, false);
-  if (!day) {
+  let day;
+  try {
+    day = await reserveText(env, id, false);
+    if (!day) {
+      await releaseProject(env.DB, id);
+      return json({ error: "今日額度已滿" }, 429);
+    }
+  } catch (error) {
+    await refund(env.DB, "global:text", utcDay());
     await releaseProject(env.DB, id);
-    return json({ error: "今日額度已滿" }, 429);
+    throw error;
   }
 
   return streamDeck({
@@ -424,12 +431,21 @@ async function reviseDeck(request, env, ctx, id) {
   const claimed = await claimProject(env.DB, id);
   if (!claimed) return json({ error: "專案正在生成中" }, 409);
 
-  const day = await reserveText(env, id, true);
-  if (!day) {
+  let day;
+  let html;
+  try {
+    day = await reserveText(env, id, true);
+    if (!day) {
+      await releaseProject(env.DB, id);
+      return json({ error: "今日額度已滿" }, 429);
+    }
+    html = await current.deck.object.text();
+  } catch (error) {
+    await refund(env.DB, "global:text", utcDay());
+    await refund(env.DB, `proj:${id}:revises`, "all");
     await releaseProject(env.DB, id);
-    return json({ error: "今日額度已滿" }, 429);
+    throw error;
   }
-  const html = await current.deck.object.text();
 
   return streamDeck({
     apiKey: env.MINIMAX_API_KEY,
