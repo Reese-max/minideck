@@ -371,15 +371,21 @@
     },
 
     buildOptimizePrompt(report) {
-      return [
+      const warns = report.warns || [];
+      const shown = warns.slice(0, 8);
+      const lines = [
         "目前稽核 WARN 清單：",
-        ...(report.warns.length
-          ? report.warns.map((item) => `- ${item.detail}`)
+        ...(shown.length
+          ? shown.map((item) => `- ${item.detail}`)
           : ["- 無 WARN"]),
+        ...(warns.length > 8
+          ? [`- 另有 ${warns.length - 8} 項同類問題，請一併處理。`]
+          : []),
         "",
         "強化視覺層級與留白平衡，維持所有內容不變",
         "不要新增或清空圖片佔位符。",
-      ].join("\n");
+      ];
+      return [...lines.join("\n")].slice(0, 1000).join("");
     },
 
     buildIterationPrompt(report, steer = "") {
@@ -547,6 +553,12 @@
 
   const form = document.querySelector("#brief-form");
   if (!form) return;
+  const briefInput = document.querySelector("#brief-input");
+  const pageCount = document.querySelector("#page-count");
+  const briefLimitNote = document.querySelector("#brief-limit");
+  const chatInput = document.querySelector("#chat-input");
+  const chatSubmit = document.querySelector("#chat-submit");
+  const chatLog = document.querySelector("#chat-log");
   const submitButton = form.querySelector('button[type="submit"]');
   const frame = document.querySelector("#deck-frame");
   const optimizeButton = document.querySelector("#btn-optimize");
@@ -608,6 +620,38 @@
       button.disabled = busy || !currentProjectId || !currentDeckVersion;
     });
     form.setAttribute("aria-busy", String(busy));
+    syncChatComposer();
+  }
+
+  function syncChatComposer() {
+    const unavailable = busy || !currentProjectId || !currentDeckVersion;
+    chatInput.disabled = unavailable;
+    chatSubmit.disabled = unavailable || !chatInput.value.trim();
+  }
+
+  function pageInstruction() {
+    return `\n\n請產生 ${pageCount.value} 頁。`;
+  }
+
+  function syncBriefLimit() {
+    const limit = 2000 - [...pageInstruction()].length;
+    briefInput.maxLength = limit;
+    const count = [...briefInput.value.trim()].length;
+    const error = count > limit ? `簡報需求不可超過 ${limit} 字（已保留頁數指令空間）` : "";
+    briefInput.setCustomValidity(error);
+    briefLimitNote.textContent = error || `簡報需求最多 ${limit} 字（已保留頁數指令空間，目前 ${count} 字）。`;
+    return limit;
+  }
+
+  function appendChatMessage(role, text) {
+    const row = document.createElement("div");
+    row.className = `message ${role}-message`;
+    const body = document.createElement("p");
+    body.textContent = text;
+    row.append(body);
+    chatLog.append(row);
+    chatLog.scrollTop = chatLog.scrollHeight;
+    return body;
   }
 
   function syncHqMode() {
@@ -1273,7 +1317,7 @@ html,body{margin:0!important;padding:0!important;background:#fff!important}
     document.querySelector(".audit-summary").textContent = "尚未執行";
     document.querySelector(".audit-list").innerHTML =
       '<div class="audit-item"><strong>待執行</strong><span>目前尚無稽核結果。</span></div>';
-    document.querySelector("#chat-log").innerHTML =
+    chatLog.innerHTML =
       '<div class="message assistant-message"><p>請先生成簡報。</p></div>';
     document.querySelectorAll("#export-buttons button").forEach((button) => {
       button.disabled = true;
@@ -1288,6 +1332,8 @@ html,body{margin:0!important;padding:0!important;background:#fff!important}
     hqResultBody.replaceChildren();
     iterateSteerInput.value = "";
     submitButton.disabled = true;
+    chatInput.value = "";
+    syncChatComposer();
   }
 
   async function runExport(button, label, action) {
@@ -1340,6 +1386,42 @@ html,body{margin:0!important;padding:0!important;background:#fff!important}
       console.log("MD share_link_copied", url);
     }),
   );
+
+  chatInput.addEventListener("input", syncChatComposer);
+  chatInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && !event.isComposing) {
+      event.preventDefault();
+      chatSubmit.click();
+    }
+  });
+
+  chatSubmit.addEventListener("click", async () => {
+    if (busy || !currentProjectId || !currentDeckVersion) return;
+    const message = chatInput.value.trim();
+    if (!message) return;
+    if ([...message].length > 1000) {
+      appendChatMessage("assistant", "修訂指令不可超過 1000 字。");
+      return;
+    }
+    const id = currentProjectId;
+    appendChatMessage("user", message);
+    const reply = appendChatMessage("assistant", "正在修訂簡報⋯");
+    setBusy(true);
+    try {
+      setStage("revise", "active", "依修訂對話更新簡報⋯");
+      const revised = await MD.api.revise(id, message);
+      const html = await fetchDeck(id, revised.version);
+      await fillAndSave(id, html);
+      await auditAndFix(id, false);
+      reply.textContent = `已完成修訂，簡報更新為 v${currentDeckVersion}。`;
+      chatInput.value = "";
+    } catch (error) {
+      reply.textContent = error?.message ?? "修訂失敗，請稍後再試。";
+      showError(error);
+    } finally {
+      setBusy(false);
+    }
+  });
 
   optimizeButton.addEventListener("click", async () => {
     if (busy || !currentProjectId || !currentAudit) return;
@@ -1473,6 +1555,8 @@ html,body{margin:0!important;padding:0!important;background:#fff!important}
   });
 
   hqMode.addEventListener("change", syncHqMode);
+  briefInput.addEventListener("input", syncBriefLimit);
+  pageCount.addEventListener("change", syncBriefLimit);
 
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -1482,14 +1566,14 @@ html,body{margin:0!important;padding:0!important;background:#fff!important}
       return;
     }
 
-    const brief = document.querySelector("#brief-input").value.trim();
-    const pages = document.querySelector("#page-count").value;
+    const brief = briefInput.value.trim();
     const style = styleSelect.value;
     const sourceData = document.querySelector("#source-data").value.trim();
     const highQuality = hqMode.checked;
-    const fullBrief = `${brief}\n\n請產生 ${pages} 頁。`;
+    const briefLimit = syncBriefLimit();
+    const fullBrief = `${brief}${pageInstruction()}`;
     if ([...fullBrief].length > 2000) {
-      showError(new Error("簡報需求加上頁數後不可超過 2000 字"));
+      showError(new Error(`簡報需求不可超過 ${briefLimit} 字（已保留頁數指令空間）`));
       return;
     }
 
@@ -1518,6 +1602,7 @@ html,body{margin:0!important;padding:0!important;background:#fff!important}
   });
 
   resetShell();
+  syncBriefLimit();
   syncHqMode();
   initializeTurnstile();
   refreshQuota().catch(() => {});

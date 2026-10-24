@@ -37,7 +37,8 @@
 
         <form id="brief-form" class="form-controls--with-style">
           <label class="sr-only" for="brief-input">簡報需求</label>
-          <textarea id="brief-input" name="brief" maxlength="2000" placeholder="例如：為投資人做一份 B 輪募資簡報，聚焦 2026 上半年營收成長、產品線擴張與市場切入策略；語氣專業自信。"></textarea>
+          <textarea id="brief-input" name="brief" maxlength="1989" aria-describedby="brief-limit" placeholder="例如：為投資人做一份 B 輪募資簡報，聚焦 2026 上半年營收成長、產品線擴張與市場切入策略；語氣專業自信。"></textarea>
+          <p id="brief-limit" class="chat-note" aria-live="polite">簡報需求最多 1989 字（已保留頁數指令空間）。</p>
 
           <label class="source-field" for="source-data">
             <span>參考資料（選填，最多 3000 字）</span>
@@ -208,8 +209,8 @@
 
       <div class="chat-composer">
         <label class="sr-only" for="chat-input">輸入修訂指令</label>
-        <input id="chat-input" type="text" maxlength="1000" placeholder="輸入修訂指令⋯">
-        <button type="button" aria-label="送出修訂">↑</button>
+        <input id="chat-input" type="text" maxlength="1000" placeholder="輸入修訂指令⋯" disabled>
+        <button id="chat-submit" type="button" aria-label="送出修訂" disabled>↑</button>
       </div>
       <p class="chat-note">修訂會佔用今日額度。</p>
     </aside>
