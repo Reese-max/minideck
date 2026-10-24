@@ -371,15 +371,21 @@
     },
 
     buildOptimizePrompt(report) {
-      return [
+      const warns = report.warns || [];
+      const shown = warns.slice(0, 8);
+      const lines = [
         "目前稽核 WARN 清單：",
-        ...(report.warns.length
-          ? report.warns.map((item) => `- ${item.detail}`)
+        ...(shown.length
+          ? shown.map((item) => `- ${item.detail}`)
           : ["- 無 WARN"]),
+        ...(warns.length > 8
+          ? [`- 另有 ${warns.length - 8} 項同類問題，請一併處理。`]
+          : []),
         "",
         "強化視覺層級與留白平衡，維持所有內容不變",
         "不要新增或清空圖片佔位符。",
-      ].join("\n");
+      ];
+      return [...lines.join("\n")].slice(0, 1000).join("");
     },
 
     buildIterationPrompt(report, steer = "") {

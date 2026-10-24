@@ -63,6 +63,10 @@ const optimizePrompt = globalThis.MD.audit.buildOptimizePrompt({
 assert.match(optimizePrompt, /目前稽核 WARN 清單/);
 assert.match(optimizePrompt, /第3頁：獨立數字 7 個超過 6 個/);
 assert.match(optimizePrompt, /強化視覺層級與留白平衡，維持所有內容不變/);
+const manyWarns = [];
+for (let s = 1; s <= 12; s++) for (let i = 0; i < 5; i++) manyWarns.push({ slide: s, type: "font-min", detail: `第${s}頁：內文字級 16px 落在 13–16px 警示區間：「營收成長」` });
+const longOptimizePrompt = globalThis.MD.audit.buildOptimizePrompt({ fails: [], warns: manyWarns });
+assert.ok([...longOptimizePrompt].length <= 1000);
 assert.match(
   globalThis.MD.audit.buildIterationPrompt(
     { fails: [], warns: [] },
