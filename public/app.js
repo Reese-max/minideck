@@ -371,15 +371,16 @@
     },
 
     buildOptimizePrompt(report) {
-      return [
+      const lines = [
         "目前稽核 WARN 清單：",
         ...(report.warns.length
-          ? report.warns.map((item) => `- ${item.detail}`)
+          ? report.warns.slice(0, 8).map((item) => `- ${item.detail}`)
           : ["- 無 WARN"]),
         "",
         "強化視覺層級與留白平衡，維持所有內容不變",
         "不要新增或清空圖片佔位符。",
-      ].join("\n");
+      ];
+      return [...lines.join("\n")].slice(0, 1000).join("");
     },
 
     buildIterationPrompt(report, steer = "") {

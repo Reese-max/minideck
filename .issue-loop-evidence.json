@@ -1,0 +1,12 @@
+{
+  "repo": "Reese-max/minideck",
+  "issue": 38,
+  "base_sha": "d8997a74e77108b8bb2d21efe205493db26b4552",
+  "red_proof": "Command: node --import ./test/register-loader.mjs test/persona-historical-scope.mjs\nExit: 1\nAssertionError [ERR_ASSERTION]: 12 slides × 5 font-min WARNs produced 2524 characters; revise allows 1000",
+  "test_command": "npm run check",
+  "test_exit": 0,
+  "tests_passed": 24,
+  "tests_failed": 0,
+  "summary": "buildOptimizePrompt 沿用 buildIterationPrompt 的前 8 則限制與 Unicode code point 截斷方式，確保修訂指令不超過 1000 字，README 已記錄限制。新增 12 頁 × 5 則 font-min WARN、超長 emoji 與空 WARN 回歸檢查，並重用既有 D1/R2 記憶體測試環境確認帶權杖的 worker 修訂請求通過長度驗證後回傳零額度 429，而非 413。Git Bash 執行 npm run check 結束碼為 0，PASS 檢查群組由 21 增為 24，無失敗。",
+  "not_done": "未呼叫外部 MiniMax、未 push、未建立 PR、未執行 CI 或 Preview/Production 部署；外部動作由 driver 負責。專案沒有獨立 lint、typecheck、build、coverage ratchet、CRAP 或 mutation scripts，未新增工具。"
+}
