@@ -185,6 +185,21 @@
     rollback(id, version) {
       return jsonRequest(`/api/projects/${id}/rollback`, { version }, id);
     },
+    publish(id, version) {
+      return jsonRequest(`/api/projects/${id}/publish`, { version }, id);
+    },
+    unpublish(id) {
+      return jsonRequest(`/api/projects/${id}/unpublish`, {}, id);
+    },
+    async preview(id, version) {
+      const query = version === undefined ? "" : `?version=${version}`;
+      const response = await fetch(`/api/projects/${id}/preview${query}`, {
+        cache: "no-store",
+        headers: projectHeaders(id),
+      });
+      if (!response.ok) throw await apiError(response);
+      return response.text();
+    },
     judge(id, version) {
       return jsonRequest(`/api/projects/${id}/judge`, { version }, id);
     },
@@ -575,7 +590,13 @@
   const pdfButton = document.querySelector("#btn-pdf");
   const pptxButton = document.querySelector("#btn-pptx");
   const shareButton = document.querySelector("#btn-share");
-  const downloadButtons = [htmlButton, pdfButton, pptxButton, shareButton];
+  const publishButton = document.querySelector("#btn-publish");
+  const unpublishButton = document.querySelector("#btn-unpublish");
+  const playerPreviewButton = document.querySelector("#btn-player-preview");
+  const playerPreview = document.querySelector("#player-preview");
+  const publicationStatus = document.querySelector("#publication-status");
+  const publicationFeedback = document.querySelector("#publication-feedback");
+  const downloadButtons = [htmlButton, pdfButton, pptxButton];
   const versionList = document.querySelector("#version-list");
   const previewVersion = document.querySelector("[data-preview-version]");
   const turnstileBox = document.querySelector("#cf-turnstile");
@@ -594,6 +615,8 @@
   let currentAudit = null;
   let currentProjectId = "";
   let currentDeckVersion = 0;
+  let publication = null;
+  let previewRequest = 0;
   let iterationRunning = false;
   let iterationStopRequested = false;
 
@@ -619,6 +642,12 @@
     downloadButtons.forEach((button) => {
       button.disabled = busy || !currentProjectId || !currentDeckVersion;
     });
+    publishButton.disabled = busy || !currentDeckVersion || publication?.published_version === currentDeckVersion;
+    publishButton.textContent = currentDeckVersion ? `發布 v${currentDeckVersion}` : "發布";
+    playerPreviewButton.disabled = busy || !currentDeckVersion;
+    unpublishButton.disabled = busy || !publication?.published_version;
+    shareButton.disabled = busy || !publication?.published_version;
+    versionList.querySelectorAll("button").forEach((button) => { button.disabled = busy; });
     form.setAttribute("aria-busy", String(busy));
     syncChatComposer();
   }
@@ -776,6 +805,13 @@
       time.textContent = formatTime(item.created_at);
       meta.append(title, time);
 
+      const previewButton = document.createElement("button");
+      previewButton.className = "outline-button version-rollback";
+      previewButton.type = "button";
+      previewButton.textContent = "預覽";
+      previewButton.setAttribute("aria-label", `預覽 v${item.version}`);
+      previewButton.addEventListener("click", () => previewPlayer(id, item.version));
+
       const button = document.createElement("button");
       button.className = "outline-button version-rollback";
       button.type = "button";
@@ -793,8 +829,7 @@
             `source=${item.version}`,
             `version=${result.version}`,
           );
-          const project = await MD.api.getProject(id);
-          renderVersions(id, project.versions);
+          await refreshVersions(id);
           await loadPreview(id, result.version);
           currentProjectId = id;
           await auditAndFix(id, false);
@@ -805,16 +840,39 @@
           });
         }
       });
-      row.append(meta, button);
+      row.append(meta, previewButton, button);
       rows.append(row);
     }
   }
 
   async function refreshVersions(id) {
     const project = await MD.api.getProject(id);
+    publication = project;
+    const draft = project.current_version;
+    const published = project.published_version;
+    const changes = draft - (published ?? 0);
+    publicationStatus.textContent = `草稿 v${draft} · ${published ? `已發布 v${published}` : "尚未發布"} · ${changes ? `有 ${changes} 個未發布變更` : "所有變更已發布"}`;
     renderVersions(id, project.versions);
     iteratePanel.querySelector(".iterate-quota").textContent = `已用修訂額度 ${reviseQuotaUsed(project)} / 6`;
+    setBusy(busy);
     return project;
+  }
+
+  async function previewPlayer(id, version) {
+    const request = ++previewRequest;
+    const previewFrame = playerPreview.querySelector("iframe");
+    const status = playerPreview.querySelector("[data-player-preview-status]");
+    previewFrame.removeAttribute("srcdoc");
+    status.textContent = `正在載入 v${version}⋯`;
+    playerPreview.showModal();
+    try {
+      const html = await MD.api.preview(id, version);
+      if (request !== previewRequest || !playerPreview.open) return;
+      previewFrame.srcdoc = html;
+      status.textContent = `預覽 v${version}（僅擁有者可見），不會更新公開連結。`;
+    } catch (error) {
+      if (request === previewRequest && playerPreview.open) status.textContent = `預覽失敗：${error.message}`;
+    }
   }
 
   async function fillAndSave(id, html) {
@@ -985,6 +1043,8 @@ html,body{margin:0!important;padding:0!important;background:#fff!important}
 
     async share() {
       if (!currentProjectId) throw new Error("目前沒有可分享的簡報");
+      const project = await refreshVersions(currentProjectId);
+      if (!project.published_version) throw new Error("簡報尚未發布，請先預覽並發布");
       const url = `${location.origin}/p/${currentProjectId}`;
       await navigator.clipboard.writeText(url);
       return url;
@@ -1325,6 +1385,9 @@ html,body{margin:0!important;padding:0!important;background:#fff!important}
     currentAudit = null;
     currentProjectId = "";
     currentDeckVersion = 0;
+    publication = null;
+    publicationStatus.textContent = "草稿 v0 · 尚未發布";
+    publicationFeedback.textContent = "編輯與儲存只會更新草稿；按發布才會更新公開連結。";
     iterationRunning = false;
     iterationStopRequested = false;
     resetIterationPanel();
@@ -1422,6 +1485,33 @@ html,body{margin:0!important;padding:0!important;background:#fff!important}
       setBusy(false);
     }
   });
+
+  playerPreviewButton.addEventListener("click", () => previewPlayer(currentProjectId, currentDeckVersion));
+  playerPreview.querySelector("button").addEventListener("click", () => playerPreview.close());
+  playerPreview.addEventListener("close", () => {
+    previewRequest++;
+    playerPreview.querySelector("iframe").removeAttribute("srcdoc");
+  });
+  for (const [button, unpublish] of [[publishButton, false], [unpublishButton, true]]) {
+    button.addEventListener("click", async () => {
+      if (busy || !currentProjectId) return;
+      setBusy(true);
+      publicationFeedback.textContent = unpublish ? "正在下線⋯" : `正在發布 v${currentDeckVersion}⋯`;
+      try {
+        const receipt = unpublish
+          ? await MD.api.unpublish(currentProjectId)
+          : await MD.api.publish(currentProjectId, currentDeckVersion);
+        await refreshVersions(currentProjectId);
+        publicationFeedback.textContent = unpublish
+          ? "已下線，公開連結無法再讀取簡報；草稿與版本均保留。"
+          : `已發布 v${receipt.published_version}（${formatTime(receipt.published_at)}），公開連結已更新。`;
+      } catch (error) {
+        publicationFeedback.textContent = `${unpublish ? "下線" : "發布"}失敗：${error.message}`;
+      } finally {
+        setBusy(false);
+      }
+    });
+  }
 
   optimizeButton.addEventListener("click", async () => {
     if (busy || !currentProjectId || !currentAudit) return;
@@ -1583,7 +1673,9 @@ html,body{margin:0!important;padding:0!important;background:#fff!important}
     hqResultBody.replaceChildren();
     try {
       const { id } = await MD.api.createProject(fullBrief, turnstileToken);
+      resetShell();
       currentProjectId = id;
+      await refreshVersions(id);
       history.replaceState(null, "", `#p=${id}`);
       console.log("MD project_created", `project=${id}`);
       await refreshQuota();

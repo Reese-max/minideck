@@ -16,7 +16,13 @@ jobs:
           node-version: "22"
           cache: npm
       - run: npm ci
+      - run: npm ci --prefix workers/presentation-studio-mcp
       - run: npm run check
+      - name: Native V2 MCP with isolated local D1/R2 and no outbound transport
+        run: npm run test:worker
+      - run: npx playwright install --with-deps chromium
+      - name: Native UI with isolated local Worker/D1/R2 and mocked provider transport
+        run: npm run test:browser
 
   deploy-preview:
     needs: check
@@ -29,6 +35,8 @@ jobs:
           node-version: "22"
           cache: npm
       - run: npm ci
+      - name: Audit Preview bindings before credentials or remote writes
+        run: node scripts/isolated-preview.mjs --audit-existing
       - name: Refresh Cloudflare Token
         id: cf_token
         env:

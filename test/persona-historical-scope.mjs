@@ -16,22 +16,29 @@ function createD1() {
   return {
     prepare(sql) {
       let bound = [];
+      // D1 accepts numbered placeholders (?N) bound positionally; node:sqlite
+      // only binds anonymous (?) parameters. Translate ?N → ? and map every
+      // occurrence (in any order, repeats included) to bound[N-1].
+      const paramIndexes = [...sql.matchAll(/\?(\d+)/g)].map((m) => Number(m[1]));
+      const normalized = paramIndexes.length ? sql.replace(/\?\d+/g, "?") : sql;
+      const positional = () =>
+        paramIndexes.length ? paramIndexes.map((i) => bound[i - 1]) : bound;
       return {
         bind(...args) {
           bound = args;
           return this;
         },
         async first() {
-          const stmt = db.prepare(sql);
-          return stmt.get(...bound) ?? null;
+          const stmt = db.prepare(normalized);
+          return stmt.get(...positional()) ?? null;
         },
         async all() {
-          const stmt = db.prepare(sql);
-          return { results: stmt.all(...bound) };
+          const stmt = db.prepare(normalized);
+          return { results: stmt.all(...positional()) };
         },
         async run() {
-          const stmt = db.prepare(sql);
-          const info = stmt.run(...bound);
+          const stmt = db.prepare(normalized);
+          const info = stmt.run(...positional());
           return { meta: { changes: Number(info.changes) } };
         },
       };
@@ -107,8 +114,25 @@ const assets = {
   },
 };
 
+const mockDb = createD1();
+
+// Regression: D1 mock binder contract — every src/ query uses numbered ?N
+// placeholders, which node:sqlite cannot bind positionally (SQLITE_RANGE).
+// The mock must map each ?N occurrence — out of order and repeated — to
+// bound[N-1]. Covers guard.js upsert WHERE ?3 and store.js SELECT ?1 … ?1.
+{
+  const probe = mockDb.prepare(
+    "SELECT ?2 AS second_col, ?1 AS first_col, ?2 AS second_again",
+  );
+  const row = await probe.bind("alpha", "beta").first();
+  assert.equal(row.second_col, "beta");
+  assert.equal(row.first_col, "alpha");
+  assert.equal(row.second_again, "beta");
+  console.log("PASS D1 mock ?N 依索引綁定（亂序與重複佔位符正確對應 bind 參數）");
+}
+
 const mockEnv = {
-  DB: createD1(),
+  DB: mockDb,
   BUCKET: createBucket(),
   ASSETS: assets,
   IP_SALT: "test-salt-12345",
@@ -196,6 +220,17 @@ try {
   assert.equal(saveV2Res.status, 200);
   assert.deepEqual(await saveV2Res.json(), { version: 2 });
 
+  const publishRes = await worker.fetch(
+    new Request(`https://minideck.test/api/projects/${projectId}/publish`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "X-Project-Token": projectToken },
+      body: JSON.stringify({ version: 2 }),
+    }),
+    mockEnv,
+  );
+  assert.equal(publishRes.status, 200);
+  assert.equal((await publishRes.json()).published_version, 2);
+
   // 4. Test Scenario: Unrelated anonymous recipient views the normal shared link /p/<id>
   const anonPlayerRes = await worker.fetch(
     new Request(`https://minideck.test/p/${projectId}`),
@@ -206,7 +241,7 @@ try {
   assert.match(anonPlayerHtml, /公司估值公開版/);
   assert.doesNotMatch(anonPlayerHtml, new RegExp(DRAFT_SECRET));
   assert.doesNotMatch(anonPlayerHtml, new RegExp(projectToken));
-  console.log("PASS 公開分享頁正常載入最新版，未洩露草稿機密與權杖");
+  console.log("PASS 公開分享頁正常載入已發布版本，未洩露草稿機密與權杖");
 
   // 5. Test Regression: Anonymous caller derives /api/projects/:id/deck?version=1
   const anonV1DeckRes = await worker.fetch(
@@ -234,14 +269,14 @@ try {
   assert.equal(anonPlayerV1Res.status, 403);
   console.log("PASS 匿名存取歷史播放頁 /p/:id?version=1 被拒絕 (403)");
 
-  // 8. Test: Anonymous caller visits /p/:id?version=2 (matching current_version)
+  // 8. Test: Anonymous caller visits /p/:id?version=2 (matching published_version)
   const anonPlayerV2Res = await worker.fetch(
     new Request(`https://minideck.test/p/${projectId}?version=2`),
     mockEnv,
   );
   assert.equal(anonPlayerV2Res.status, 200);
   assert.match(await anonPlayerV2Res.text(), /公司估值公開版/);
-  console.log("PASS 匿名存取當前版本播放頁 /p/:id?version=2 正常播放");
+  console.log("PASS 匿名存取已發布版本播放頁 /p/:id?version=2 正常播放");
 
   // 9. Test: Owner with X-Project-Token can inspect historical v1 and current v2
   const ownerV1Res = await worker.fetch(
@@ -281,15 +316,17 @@ try {
   assert.equal(rollbackRes.status, 200);
   assert.deepEqual(await rollbackRes.json(), { version: 3 });
 
-  // Anonymous user accessing /p/:id now sees v3 (rolled-back to v1)
+  // Rollback creates private v3; the shared link must stay on published v2.
   const anonRolledRes = await worker.fetch(
     new Request(`https://minideck.test/p/${projectId}`),
     mockEnv,
   );
   assert.equal(anonRolledRes.status, 200);
-  assert.match(await anonRolledRes.text(), new RegExp(DRAFT_SECRET));
+  const rolledPlayerHtml = await anonRolledRes.text();
+  assert.match(rolledPlayerHtml, /公司估值公開版/);
+  assert.doesNotMatch(rolledPlayerHtml, new RegExp(DRAFT_SECRET));
 
-  // Anonymous user cannot access superseded version v2
+  // Raw HTML still requires the owner token, even for a published version.
   const anonV2DeckRes = await worker.fetch(
     new Request(`https://minideck.test/api/projects/${projectId}/deck?version=2`),
     mockEnv,
@@ -300,8 +337,12 @@ try {
     new Request(`https://minideck.test/p/${projectId}?version=2`),
     mockEnv,
   );
-  assert.equal(anonPlayerV2AfterRollback.status, 403);
-  console.log("PASS 回退至 v1 後，被取代的歷史版本 v2 仍嚴格受保護 (403)");
+  assert.equal(anonPlayerV2AfterRollback.status, 200);
+  const anonPlayerV3 = await worker.fetch(
+    new Request(`https://minideck.test/p/${projectId}?version=3`), mockEnv,
+  );
+  assert.equal(anonPlayerV3.status, 403);
+  console.log("PASS 回退至 v1 只產生受保護的草稿 v3 (403)，公開版本仍為 v2");
 
   // 11. Test: Revocation & Deletion semantics
   const deleteRes = await worker.fetch(
