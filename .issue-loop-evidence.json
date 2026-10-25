@@ -1,0 +1,12 @@
+{
+  "repo": "Reese-max/minideck",
+  "issue": 41,
+  "base_sha": "d8997a74e77108b8bb2d21efe205493db26b4552",
+  "red_proof": "Before implementation, bash -lc 'node --test test/brief-form.mjs' exited 1: tests 11, pass 0, fail 11. Failing test: default brief maxlength reserves the 12-page suffix before typing. AssertionError [ERR_ASSERTION]: Expected values to be strictly equal: 2000 !== 1989 (actual: 2000, expected: 1989). Failing test: 5 pages: one character over the limit shows an input error and never creates a project. AssertionError [ERR_ASSERTION]: overflow must be invalid before submission; true !== false.",
+  "test_command": "npm run check",
+  "test_exit": 0,
+  "tests_passed": 11,
+  "tests_failed": 0,
+  "summary": "The brief textarea now reserves the exact page suffix within the existing 2000-character API limit: 1990 characters for 5/8 pages and 1989 for 10/12 pages. An accessible live counter and native validity update on input and page changes, preserve existing text, and block overflow before createProject, including programmatic input. Eleven regression cases execute the complete frontend DOM initialization and submit handler, cover every page option at and above the boundary, page switching, and UTF-16 overflow, and run through npm run check alongside all existing tests; README documents the limits.",
+  "not_done": "No push, PR, merge, branch changes, preview/production deployment, or live external API calls. Browser rendering and live Cloudflare/Turnstile acceptance were not verified; regression tests use a VM DOM harness. The project has no separate lint, typecheck, build, coverage, CRAP, or mutation scripts, so none were added or run."
+}

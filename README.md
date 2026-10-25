@@ -44,6 +44,8 @@ curl -sS "$BASE/api/quota"
 
 正式環境的 `turnstileToken` 必須由 Turnstile widget 取得；本機測試設定可使用測試 token。
 
+網頁需求欄位會從 API 的 2000 字上限預留頁數指示：5／8 頁可輸入 1990 字，10／12 頁可輸入 1989 字。字數提示與 `maxlength` 隨頁數更新；切換頁數造成超限時會即時提示並阻止建立專案，保留原文供修改。欄位依瀏覽器原生 `maxlength` 使用 UTF-16 字元數計算，emoji 可能佔兩個字元。
+
 ```bash
 curl -sS "$BASE/api/projects" \
   -H 'content-type: application/json' \

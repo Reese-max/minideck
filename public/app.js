@@ -547,6 +547,9 @@
 
   const form = document.querySelector("#brief-form");
   if (!form) return;
+  const briefInput = document.querySelector("#brief-input");
+  const pageCount = document.querySelector("#page-count");
+  const briefLimit = document.querySelector("#brief-limit");
   const submitButton = form.querySelector('button[type="submit"]');
   const frame = document.querySelector("#deck-frame");
   const optimizeButton = document.querySelector("#btn-optimize");
@@ -613,6 +616,21 @@
   function syncHqMode() {
     hqCost.hidden = !hqMode.checked;
     styleSelect.disabled = busy || hqMode.checked;
+  }
+
+  function pageSuffix() {
+    return `\n\n請產生 ${pageCount.value} 頁。`;
+  }
+
+  function syncBriefLimit() {
+    briefInput.maxLength = 2000 - pageSuffix().length;
+    const tooLong = briefInput.value.length > briefInput.maxLength;
+    const message = `簡報需求最多 ${briefInput.maxLength} 字（已預留頁數指示）`;
+    briefInput.setCustomValidity(tooLong ? message : "");
+    briefInput.setAttribute("aria-invalid", String(tooLong));
+    briefLimit.textContent = tooLong
+      ? message
+      : `${briefInput.value.length} / ${briefInput.maxLength} 字（已預留頁數指示）`;
   }
 
   function turnstileError(message) {
@@ -1473,6 +1491,8 @@ html,body{margin:0!important;padding:0!important;background:#fff!important}
   });
 
   hqMode.addEventListener("change", syncHqMode);
+  briefInput.addEventListener("input", syncBriefLimit);
+  pageCount.addEventListener("change", syncBriefLimit);
 
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -1482,16 +1502,17 @@ html,body{margin:0!important;padding:0!important;background:#fff!important}
       return;
     }
 
-    const brief = document.querySelector("#brief-input").value.trim();
-    const pages = document.querySelector("#page-count").value;
+    syncBriefLimit();
+    if (!briefInput.checkValidity()) {
+      showError(new Error(briefInput.validationMessage));
+      return;
+    }
+
+    const brief = briefInput.value.trim();
     const style = styleSelect.value;
     const sourceData = document.querySelector("#source-data").value.trim();
     const highQuality = hqMode.checked;
-    const fullBrief = `${brief}\n\n請產生 ${pages} 頁。`;
-    if ([...fullBrief].length > 2000) {
-      showError(new Error("簡報需求加上頁數後不可超過 2000 字"));
-      return;
-    }
+    const fullBrief = `${brief}${pageSuffix()}`;
 
     setBusy(true);
     stageNames.forEach((name) => setStage(name, "idle", "等待中"));
@@ -1519,6 +1540,7 @@ html,body{margin:0!important;padding:0!important;background:#fff!important}
 
   resetShell();
   syncHqMode();
+  syncBriefLimit();
   initializeTurnstile();
   refreshQuota().catch(() => {});
   addEventListener("resize", fitPreview);
