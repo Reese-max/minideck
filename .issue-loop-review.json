@@ -1,0 +1,20 @@
+{
+  "pr": 47,
+  "head": "06e8eb327e28323a4f36d7b2d7179bf276491984",
+  "findings": [
+    {
+      "severity": "med",
+      "file": "public/app.js",
+      "line": 1315,
+      "issue": "Chat revisions acquire busy, but version rollback buttons neither honor nor acquire that lock. A rollback can run during a chat revision (including image filling/auditing), and chat can start during rollback; competing writes and preview updates can replace the user's requested result. Include rollback controls and their handler in the shared busy boundary."
+    },
+    {
+      "severity": "med",
+      "file": "public/app.js",
+      "line": 1313,
+      "issue": "The chat availability guard reuses currentDeckVersion from the previous project when createProject changes currentProjectId. If the new generation fails, chat remains enabled for a project without a deck, retaining the previous project's conversation and unsent instruction. Reset project-specific shell state after successful project creation, before assigning the new ID."
+    }
+  ],
+  "fixed": true,
+  "summary": "Fixed two medium-severity defects: chat and rollback now share the busy lock through completion, and successful project creation resets stale deck/chat state while failed creation preserves the existing project. Three new regressions failed before the fixes; Git Bash npm run check now passes all six legacy test entrypoints and all nine DOM tests. No push or deployment was performed."
+}
