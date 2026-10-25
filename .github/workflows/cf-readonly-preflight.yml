@@ -1,0 +1,54 @@
+name: PR44 Cloudflare read-only credential preflight
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: minideck-pr44-cf-readonly-preflight
+  cancel-in-progress: false
+
+jobs:
+  metadata-readiness:
+    if: >-
+      github.repository == 'Reese-max/minideck' &&
+      github.repository_owner == 'Reese-max' &&
+      github.actor == 'Reese-max' && github.triggering_actor == 'Reese-max' &&
+      github.event.pull_request.number == 44 &&
+      github.event.pull_request.state == 'open' && github.event.pull_request.draft == true &&
+      github.event.pull_request.user.login == 'Reese-max' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.repo.owner.login == 'Reese-max' &&
+      github.event.pull_request.head.ref == 'feature/fix-new-issues-38-41'
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Pin the reviewed helper before execution
+        run: printf '%s  %s\n' '9b910cacde369795a94548bb6951b5227247dca590576089f309d737061a1ff7' '.github/scripts/cf-readonly-preflight.mjs' | sha256sum --check --status
+      - name: Verify canonical product and current PR lease before Cloudflare credentials
+        id: guard
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node .github/scripts/cf-readonly-preflight.mjs --guard
+      - name: Read bounded metadata only with existing credentials
+        if: steps.guard.outputs.ready == 'true'
+        env:
+          PREFLIGHT_GUARD_HEAD: ${{ steps.guard.outputs.head }}
+          PREFLIGHT_STARTED_MS: ${{ steps.guard.outputs.started_ms }}
+          PREFLIGHT_USED: ${{ steps.guard.outputs.used }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: node .github/scripts/cf-readonly-preflight.mjs --probe
