@@ -211,19 +211,20 @@ async function reserveText(env, id, reserveRevise) {
     return null;
   }
 
-  if (
-    reserveRevise &&
-    !(await checkAndIncrement(
+  if (!reserveRevise) return day;
+
+  let reviseReserved = false;
+  try {
+    reviseReserved = await checkAndIncrement(
       env.DB,
       `proj:${id}:revises`,
       "all",
       limit(env, "LIMIT_PROJECT_REVISES"),
-    ))
-  ) {
-    await refund(env.DB, "global:text", day);
-    return null;
+    );
+    return reviseReserved ? day : null;
+  } finally {
+    if (!reviseReserved) await refund(env.DB, "global:text", day);
   }
-  return day;
 }
 
 function publicTextError(error) {
@@ -279,11 +280,13 @@ async function generateDeck(request, env, ctx, id) {
   if (!claimed) return json({ error: "專案正在生成中" }, 409);
 
   const project = access.project;
-  const day = await reserveText(env, id, false);
-  if (!day) {
-    await releaseProject(env.DB, id);
-    return json({ error: "今日額度已滿" }, 429);
+  let day;
+  try {
+    day = await reserveText(env, id, false);
+  } finally {
+    if (!day) await releaseProject(env.DB, id);
   }
+  if (!day) return json({ error: "今日額度已滿" }, 429);
 
   return streamDeck({
     apiKey: env.MINIMAX_API_KEY,
@@ -424,12 +427,25 @@ async function reviseDeck(request, env, ctx, id) {
   const claimed = await claimProject(env.DB, id);
   if (!claimed) return json({ error: "專案正在生成中" }, 409);
 
-  const day = await reserveText(env, id, true);
-  if (!day) {
-    await releaseProject(env.DB, id);
-    return json({ error: "今日額度已滿" }, 429);
+  let day;
+  let html;
+  let prepared = false;
+  try {
+    day = await reserveText(env, id, true);
+    if (!day) return json({ error: "今日額度已滿" }, 429);
+    html = await current.deck.object.text();
+    prepared = true;
+  } finally {
+    if (!prepared) {
+      if (day) {
+        await Promise.allSettled([
+          refund(env.DB, "global:text", day),
+          refund(env.DB, `proj:${id}:revises`, "all"),
+        ]);
+      }
+      await releaseProject(env.DB, id);
+    }
   }
-  const html = await current.deck.object.text();
 
   return streamDeck({
     apiKey: env.MINIMAX_API_KEY,

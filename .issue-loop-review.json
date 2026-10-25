@@ -1,0 +1,26 @@
+{
+  "pr": 43,
+  "head": "d6ca36e862e959443dcc4315704d4003f7a5ff3b",
+  "findings": [
+    {
+      "severity": "med",
+      "file": "src/worker.js",
+      "line": 290,
+      "issue": "generate/revise refund unconditionally when reserveText throws. A failed global INSERT decrements existing global usage (7 -> 6), and a failed revise INSERT decrements historical revise usage (2 -> 1). Track confirmed reservations and refund only those owned by this request."
+    },
+    {
+      "severity": "med",
+      "file": "src/worker.js",
+      "line": 444,
+      "issue": "Quota refunds are awaited before releaseProject. If a refund UPDATE fails after an R2 body-read or quota-reservation failure, releaseProject is skipped and the project stays generating, so retry/DELETE still fail with 409. Isolate refund failures and always attempt lock release."
+    },
+    {
+      "severity": "med",
+      "file": "src/worker.js",
+      "line": 444,
+      "issue": "The revise catch recomputes utcDay instead of using the successfully reserved day. If the R2 read fails across UTC midnight, yesterday's reservation remains charged and today's unrelated usage is decremented. Refund the captured reservation day."
+    }
+  ],
+  "fixed": true,
+  "summary": "Fixed three medium-severity quota compensation defects: refunds of unreserved usage, refund failures preventing lock release, and refunds against the wrong UTC day. Seven of eight regression scenarios failed before the fix; all eight now pass, including successful retries and deletion after cleanup. Git Bash npm run check and the explicit-config minideck Wrangler dry-run both passed (exit 0); changes are committed locally without push or deployment."
+}
