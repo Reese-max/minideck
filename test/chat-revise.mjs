@@ -21,7 +21,12 @@ class Element {
     return this.selectors.get(selector) ?? this.children.find((child) =>
       child.className.split(" ").includes(selector.slice(1))) ?? null;
   }
-  querySelectorAll() { return []; }
+  querySelectorAll(selector) {
+    return [...this.children, ...this.selectors.values()].flatMap((child) => [
+      ...(selector === "button" && child.type === "button" ? [child] : []),
+      ...child.querySelectorAll(selector),
+    ]);
+  }
   append(...children) { this.children.push(...children); }
   replaceChildren(...children) { this.children = children; }
   set innerHTML(value) { this.children = []; this.markup = value; }
@@ -49,7 +54,7 @@ const done = () => new Response('event: done\ndata: {"version":2}\n\n', {
   headers: { "content-type": "text/event-stream" },
 });
 
-async function mount({ project = true, versions = true, revise = done, turnstile = false, audit } = {}) {
+async function mount({ project = true, versions = true, revise = done, rollback = () => json({ version: 4 }), turnstile = false, audit } = {}) {
   const document = new Element();
   document.createElement = () => new Element();
   for (const [, id] of html.matchAll(/\bid="([^"]+)"/g)) {
@@ -88,6 +93,7 @@ async function mount({ project = true, versions = true, revise = done, turnstile
   const context = {
     document, Response, TextDecoder, URLSearchParams,
     location: { hash: project ? "#p=project" : "" },
+    history: { replaceState() {} },
     console: { log() {}, error() {} },
     addEventListener() {},
     sessionStorage: {
@@ -100,11 +106,13 @@ async function mount({ project = true, versions = true, revise = done, turnstile
         callbacks.callback("test-token");
         return 0;
       },
+      reset() {},
     } : undefined,
     fetch: async (path, init = {}) => {
       requests.push({ path, ...init });
       if (path === "/api/quota") return new Response(null, { status: 503 });
       if (path === "/api/projects/project/revise") return revise();
+      if (path === "/api/projects/project/rollback") return rollback();
       if (path === "/api/projects/project") return json({
         versions: version ? [{ version, origin: "generate", created_at: "2026-10-25" }] : [],
         messages: [],
@@ -123,7 +131,7 @@ async function mount({ project = true, versions = true, revise = done, turnstile
   if (audit) context.MD.audit.run = audit;
   await settle();
   await settle();
-  return { get, button, requests, turnstileCallbacks };
+  return { get, button, requests, turnstileCallbacks, api: context.MD.api };
 }
 
 test("chat click posts the input to revise and refreshes preview, versions and messages", async () => {
@@ -242,4 +250,88 @@ test("chat stays disabled through automatic revision while resuming a project", 
     await settle();
   }
   assert.equal(button.disabled, false);
+});
+
+test("chat holds the rollback lock through revision and version-list refresh", async () => {
+  let finish;
+  let checkRefreshedButtons = false;
+  const { get, button, requests } = await mount({
+    revise: () => new Promise((resolve) => { finish = () => resolve(done()); }),
+    audit: () => {
+      if (checkRefreshedButtons) {
+        assert.ok(get("#version-list").querySelectorAll("button").every((item) => item.disabled),
+          "refreshed rollback buttons must stay disabled during revision audit");
+      }
+      return { fails: [], warns: [] };
+    },
+  });
+  const rollback = get("#version-list").querySelectorAll("button")[0];
+  get("#chat-input").value = "縮短標題";
+  const pending = button.fire("click");
+  await settle();
+  try {
+    assert.equal(rollback.disabled, true, "chat must disable rollback");
+    await rollback.listeners.get("click")[0]();
+    assert.equal(requests.some(({ path }) => path.endsWith("/rollback")), false);
+    checkRefreshedButtons = true;
+  } finally {
+    finish();
+    await pending;
+  }
+  assert.match(get("#chat-log").children.at(-1).children[0].textContent, /已完成修訂/);
+  assert.ok(get("#version-list").querySelectorAll("button").every((item) => !item.disabled));
+});
+
+test("rollback locks chat and releases controls after success or failure", async () => {
+  for (const response of [
+    () => json({ version: 4 }),
+    () => new Response(JSON.stringify({ error: "回滾失敗" }), { status: 503 }),
+  ]) {
+    let finish;
+    const { get, button, requests } = await mount({
+      rollback: () => new Promise((resolve) => { finish = () => resolve(response()); }),
+    });
+    const rollback = get("#version-list").querySelectorAll("button")[0];
+    const pending = rollback.fire("click");
+    await settle();
+    try {
+      assert.equal(button.disabled, true, "rollback must disable chat");
+      assert.equal(get("#chat-input").disabled, true);
+      get("#chat-input").value = "縮短標題";
+      await button.listeners.get("click")[0]();
+      await rollback.listeners.get("click")[0]();
+      assert.equal(requests.some(({ path }) => path.endsWith("/revise")), false);
+      assert.equal(requests.filter(({ path }) => path.endsWith("/rollback")).length, 1);
+    } finally {
+      finish();
+      await pending;
+    }
+    assert.equal(button.disabled, false);
+    assert.equal(get("#chat-input").disabled, false);
+    assert.ok(get("#version-list").querySelectorAll("button").every((item) => !item.disabled));
+  }
+});
+
+test("new project clears stale chat and deck state only after creation succeeds", async () => {
+  const { get, button, requests, api, turnstileCallbacks } = await mount({ turnstile: true });
+  get("#chat-input").value = "舊專案的指令";
+  await button.fire("click");
+  get("#chat-input").value = "舊專案尚未送出的草稿";
+  api.createProject = async () => { throw new Error("建立失敗"); };
+  await get("#brief-form").fire("submit");
+  assert.equal(get("#chat-input").value, "舊專案尚未送出的草稿");
+  assert.ok(get("#chat-log").querySelector(".user-message"));
+  assert.equal(button.disabled, false, "failed creation must preserve the current project");
+
+  turnstileCallbacks.callback("renewed-token");
+  api.createProject = async () => ({ id: "new-project" });
+  api.generate = async () => { throw new Error("生成失敗"); };
+  await get("#brief-form").fire("submit");
+  assert.equal(button.disabled, true, "a new project without a deck must not enable chat");
+  assert.equal(get("#chat-input").disabled, true);
+  assert.equal(get("#chat-input").value, "");
+  assert.equal(get("#chat-log").querySelector(".user-message"), null);
+  get("#chat-input").value = "不能送往空白新專案";
+  await button.listeners.get("click")[0]();
+  assert.equal(requests.some(({ path }) => path === "/api/projects/new-project/revise"), false);
 });

@@ -81,6 +81,8 @@ curl -sS "$BASE/api/projects/$PROJECT_ID/image" \
 
 瀏覽器中，先生成或恢復簡報，再於「修訂對話」輸入指令並點擊「送出修訂」。對話會顯示使用者指令與修訂結果，並更新預覽、版本歷史與稽核；尚無簡報或處理中時停用輸入與送出。修訂失敗會顯示錯誤並保留輸入，方便重試。
 
+修訂與版本回滾共用忙碌鎖，處理完成前停用相關操作。建立新專案成功後會清除舊對話與未送出的修訂指令；新專案尚無簡報時停用修訂。
+
 ```bash
 curl -N "$BASE/api/projects/$PROJECT_ID/revise" \
   -H 'content-type: application/json' \

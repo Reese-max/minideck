@@ -609,6 +609,9 @@
     iterateSteerInput.disabled = !currentProjectId || (busy && !iterationRunning);
     chatSendButton.disabled = busy || !currentProjectId || !currentDeckVersion;
     chatInput.disabled = chatSendButton.disabled;
+    versionList.querySelectorAll("button").forEach((button) => {
+      button.disabled = busy;
+    });
     downloadButtons.forEach((button) => {
       button.disabled = busy || !currentProjectId || !currentDeckVersion;
     });
@@ -742,10 +745,10 @@
       button.type = "button";
       button.textContent = "回滾";
       button.dataset.version = item.version;
+      button.disabled = busy;
       button.addEventListener("click", async () => {
-        versionList.querySelectorAll("button").forEach((target) => {
-          target.disabled = true;
-        });
+        if (busy) return;
+        setBusy(true);
         try {
           console.log("MD rollback_start", `project=${id}`, `source=${item.version}`);
           const result = await MD.api.rollback(id, item.version);
@@ -761,9 +764,8 @@
           await auditAndFix(id, false);
         } catch (error) {
           showError(error);
-          versionList.querySelectorAll("button").forEach((target) => {
-            target.disabled = false;
-          });
+        } finally {
+          setBusy(false);
         }
       });
       row.append(meta, button);
@@ -1541,6 +1543,7 @@ html,body{margin:0!important;padding:0!important;background:#fff!important}
     hqResultBody.replaceChildren();
     try {
       const { id } = await MD.api.createProject(fullBrief, turnstileToken);
+      resetShell();
       currentProjectId = id;
       history.replaceState(null, "", `#p=${id}`);
       console.log("MD project_created", `project=${id}`);
