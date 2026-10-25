@@ -197,6 +197,8 @@ HTTP 層錯誤一律為 `{"error":"<繁中文案>"}`，常見狀態碼為 403、
 
 建立專案同時檢查 IP 與全站額度；第二項失敗時會退還第一項。圖片 hash 快取命中不扣任何額度。所有上限由 `wrangler.toml` 的 `LIMIT_*` 變數控制。
 
+文字串流開始前發生例外時，會釋放專案鎖定，並以預留當下的 UTC 日期嘗試退還本次已成功扣除的額度；單項退款失敗不會阻斷其他退款或解鎖。
+
 ## 擴充風格 preset
 
 先在 `prompts/styles/` 加入一個 `.md`（只描述配色、字體氣質、版面密度與圖表風格）。由於 Worker 採靜態打包，接著在 `src/minimax.js` 匯入該檔並加入 `STYLE_PROMPTS`；若要在網頁選取，再於 `public/index.html` 的 `#style-select` 加入同名選項。重新啟動 Worker 後即可由 `generate` 的 `style` 欄位使用。

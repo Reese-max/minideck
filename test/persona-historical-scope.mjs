@@ -2,10 +2,11 @@ import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
+import { test } from "node:test";
 import worker from "../src/worker.js";
 
 // Helper to mock Cloudflare D1 over node:sqlite
-function createD1() {
+function createD1(beforeRun = () => {}) {
   const db = new DatabaseSync(":memory:");
   const schema = readFileSync(new URL("../schema.sql", import.meta.url), "utf8");
   for (const statement of schema.split(";")) {
@@ -31,6 +32,7 @@ function createD1() {
           return { results: stmt.all(...bound) };
         },
         async run() {
+          beforeRun(sql, bound);
           if (
             failGlobalTextInsert &&
             sql.includes("INSERT INTO quotas") &&
@@ -58,7 +60,7 @@ function createD1() {
 }
 
 // Helper to mock Cloudflare R2 bucket
-function createBucket() {
+function createBucket(beforeText = () => {}) {
   const store = new Map();
   return {
     async put(key, body, options = {}) {
@@ -88,6 +90,7 @@ function createBucket() {
         },
         body: item.content,
         async text() {
+          beforeText();
           return item.content;
         },
       };
@@ -139,6 +142,10 @@ globalThis.fetch = async (url, init = {}) => {
     return new Response(JSON.stringify({ success: true }), {
       headers: { "content-type": "application/json" },
     });
+  }
+  if (String(url) === "https://api.minimax.io/v1/chat/completions") {
+    const html = `<!doctype html><html><body>${'<section class="slide">測試</section>'.repeat(3)}</body></html>`;
+    return new Response(`data: ${JSON.stringify({ choices: [{ delta: { content: html } }] })}\n\ndata: [DONE]\n\n`);
   }
   return originalFetch(url, init);
 };
@@ -397,6 +404,90 @@ try {
   console.log("PASS 額度寫入例外後專案不卡在 generating，DELETE 可成功");
 
   console.log("ALL PERSONA C04 / J04 ACCEPTANCE CRITERIA PASSED");
+
+  for (const scenario of [
+    { name: "generate preserves existing quota when reservation fails", action: "generate", insertFailure: "global:text" },
+    { name: "revise preserves existing quotas when global reservation fails", insertFailure: "global:text" },
+    { name: "revise refunds only global quota when revise reservation fails", insertFailure: "revises" },
+    { name: "revise refunds both reservations when R2 text fails", readFailure: true },
+    { name: "revise unlocks and refunds revise quota even if global refund fails", readFailure: true, refundFailure: "global:text", globalCount: 8 },
+    { name: "revise unlocks even if revise refund fails", readFailure: true, refundFailure: "revises", reviseCount: 3 },
+    { name: "revise unlocks when partial reservation refund fails", insertFailure: "revises", refundFailure: "global:text", globalCount: 8 },
+    { name: "revise refunds the reservation day across UTC midnight", readFailure: true, midnight: true },
+  ]) {
+    await test(scenario.name, async () => {
+      const RealDate = globalThis.Date;
+      let now = RealDate.parse("2026-10-24T23:59:59Z");
+      globalThis.Date = class extends RealDate {
+        constructor(...args) { super(...(args.length ? args : [now])); }
+        static now() { return now; }
+      };
+      try {
+        let injectFailure = false;
+        const db = createD1((sql, [scope]) => {
+          if (!injectFailure) return;
+          const matches = (target) => target === scope || (target === "revises" && scope?.endsWith(":revises"));
+          if (sql.includes("INSERT INTO quotas") && matches(scenario.insertFailure)) {
+            throw new Error("d1 quota insert failed");
+          }
+          if (sql.startsWith("UPDATE quotas") && matches(scenario.refundFailure)) {
+            throw new Error("d1 quota refund failed");
+          }
+        });
+        const bucket = createBucket(() => {
+          if (!injectFailure) return;
+          if (scenario.midnight) now += 2000;
+          if (scenario.readFailure) throw new Error("r2 text failed");
+        });
+        const env = { ...mockEnv, DB: db, BUCKET: bucket, MINIMAX_API_KEY: "test-key" };
+        const create = await worker.fetch(new Request("https://minideck.test/api/projects", {
+          method: "POST",
+          body: JSON.stringify({ brief: scenario.name, turnstileToken: "valid-token" }),
+        }), env);
+        assert.equal(create.status, 200);
+        const { id, token } = await create.json();
+        const headers = { "content-type": "application/json", "X-Project-Token": token };
+        const request = (path = "", method = "GET", body) => new Request(`https://minideck.test/api/projects/${id}${path}`, {
+          method, headers, body: body === undefined ? undefined : JSON.stringify(body),
+        });
+        const action = scenario.action ?? "revise";
+        if (action === "revise") {
+          const save = await worker.fetch(request("/deck", "POST", { html: v2Html }), env);
+          assert.equal(save.status, 200);
+        }
+        for (const [scope, day, count] of [
+          ["global:text", "20261024", 7],
+          ["global:text", "20261025", 11],
+          [`proj:${id}:revises`, "all", 2],
+        ]) {
+          await db.prepare("INSERT INTO quotas(scope, day, count) VALUES(?1, ?2, ?3)").bind(scope, day, count).run();
+        }
+
+        injectFailure = true;
+        const response = await worker.fetch(request(`/${action}`, "POST", { message: "修訂" }), env);
+        assert.equal(response.status, 500);
+        const state = await worker.fetch(request(), env);
+        assert.equal(state.status, 200);
+        assert.equal((await state.json()).status, action === "generate" ? "new" : "ready", "cleanup must release the project lock");
+        const count = async (scope, day) => (await db.prepare("SELECT count FROM quotas WHERE scope = ?1 AND day = ?2").bind(scope, day).first()).count;
+        assert.equal(await count("global:text", "20261024"), scenario.globalCount ?? 7, "refund only this request's successful global reservation");
+        assert.equal(await count("global:text", "20261025"), 11, "do not refund another UTC day");
+        assert.equal(await count(`proj:${id}:revises`, "all"), scenario.reviseCount ?? 2, "refund only this request's successful revise reservation");
+
+        injectFailure = false;
+        const jobs = [];
+        const retry = await worker.fetch(request(`/${action}`, "POST", { message: "重試修訂" }), env, { waitUntil(job) { jobs.push(job); } });
+        assert.equal(retry.status, 200, "a new generation/revision must be accepted after cleanup");
+        assert.match(await retry.text(), /event: done/);
+        await Promise.all(jobs);
+        const deleted = await worker.fetch(request("", "DELETE"), env);
+        assert.equal(deleted.status, 200);
+        assert.deepEqual(await deleted.json(), { deleted: true, cleanupPending: 0 });
+      } finally {
+        globalThis.Date = RealDate;
+      }
+    });
+  }
 } finally {
   globalThis.fetch = originalFetch;
 }
