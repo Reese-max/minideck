@@ -1,0 +1,80 @@
+name: PR44 isolated stored-fixture Preview QA
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, converted_to_draft]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: minideck-pr44-stored-preview-qa
+  cancel-in-progress: false
+
+jobs:
+  isolated-stored-preview:
+    if: >-
+      github.repository == 'Reese-max/minideck' &&
+      github.actor == 'Reese-max' && github.triggering_actor == 'Reese-max' &&
+      github.event.pull_request.number == 44 &&
+      github.event.pull_request.state == 'open' && github.event.pull_request.draft == true &&
+      github.event.pull_request.user.login == 'Reese-max' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'feature/fix-new-issues-38-41'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Start cleanup reserve clock before setup
+        run: echo "MINIDECK_QA_JOB_STARTED_AT=$(date +%s%3N)" >> "$GITHUB_ENV"
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install locked source and QA-only tooling
+        run: |
+          npm ci --ignore-scripts
+          npm ci --ignore-scripts --prefix workers/presentation-studio-mcp
+          npm ci --ignore-scripts --prefix qa
+          npx --no-install playwright install --with-deps chromium
+      - name: Verify frozen application and bounded QA before credentials
+        run: |
+          node qa/control.mjs validate
+          node --test qa/*.test.mjs
+          npm run check
+          node qa/local-runtime.mjs
+      - name: Create only fresh stored-fixture Preview namespace
+        timeout-minutes: 5
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: node qa/control.mjs prepare
+      - name: Actual immutable HTTPS storage and native UI controls
+        timeout-minutes: 4
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node qa/control.mjs verify
+      - name: Clean exact owned data and revoke every immutable entry
+        if: always()
+        timeout-minutes: 4
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: node qa/control.mjs cleanup
+      - name: Retain sanitized provenance and retirement result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minideck-pr44-stored-qa-${{ github.run_id }}-${{ github.run_attempt }}
+          path: qa/output/receipt.json
+          retention-days: 7
+          if-no-files-found: ignore
+      - name: Remove private ephemeral runner credentials
+        if: always()
+        run: node qa/remove-private.mjs
