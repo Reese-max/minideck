@@ -79,6 +79,8 @@ curl -sS "$BASE/api/projects/$PROJECT_ID/image" \
 
 ### 5. 修訂簡報
 
+修訂指令上限為 1000 個 Unicode 字元。瀏覽器的一鍵優化只帶前 8 則稽核 WARN，並將完整指令截斷至 1000 字以內，避免大量警告造成 HTTP 413。
+
 ```bash
 curl -N "$BASE/api/projects/$PROJECT_ID/revise" \
   -H 'content-type: application/json' \

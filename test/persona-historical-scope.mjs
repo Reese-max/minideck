@@ -3,6 +3,7 @@ import { DatabaseSync } from "node:sqlite";
 import { readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import worker from "../src/worker.js";
+import "../public/app.js";
 
 // Helper to mock Cloudflare D1 over node:sqlite
 function createD1() {
@@ -195,6 +196,49 @@ try {
   );
   assert.equal(saveV2Res.status, 200);
   assert.deepEqual(await saveV2Res.json(), { version: 2 });
+
+  const warns = Array.from({ length: 12 }, (_, slide) =>
+    Array.from({ length: 5 }, (_, index) => ({
+      slide: slide + 1,
+      type: "font-min",
+      detail: `第${slide + 1}頁：內文字級 16px 落在 13–16px 警示區間：「營收成長 ${index + 1}」`,
+    })),
+  ).flat();
+  const optimizePrompt = globalThis.MD.audit.buildOptimizePrompt({ fails: [], warns });
+  assert.ok(
+    [...optimizePrompt].length <= 1000,
+    `12 slides × 5 font-min WARNs produced ${[...optimizePrompt].length} characters; revise allows 1000`,
+  );
+  assert.equal(optimizePrompt.match(/^- /gm).length, 8);
+  assert.match(optimizePrompt, /第1頁/);
+  assert.match(optimizePrompt, /第2頁/);
+  assert.doesNotMatch(optimizePrompt, /第3頁/);
+  assert.match(optimizePrompt, /強化視覺層級與留白平衡，維持所有內容不變/);
+  console.log("PASS 一鍵優化 12 頁 × 5 則 WARN 僅帶前 8 則且不超過 1000 字");
+
+  const reviseRes = await worker.fetch(
+    new Request(`https://minideck.test/api/projects/${projectId}/revise`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "X-Project-Token": projectToken,
+      },
+      body: JSON.stringify({ message: optimizePrompt }),
+    }),
+    { ...mockEnv, LIMIT_PROJECT_REVISES: "0" },
+  );
+  assert.equal(reviseRes.status, 429);
+  assert.deepEqual(await reviseRes.json(), { error: "今日額度已滿" });
+  console.log("PASS 一鍵優化指令通過 worker 長度驗證，以零額度阻止外部模型呼叫 (429，非 413)");
+
+  const unicodePrompt = globalThis.MD.audit.buildOptimizePrompt({
+    fails: [],
+    warns: [{ slide: 1, type: "font-min", detail: "😀".repeat(1200) }],
+  });
+  assert.equal([...unicodePrompt].length, 1000);
+  assert.ok(unicodePrompt.isWellFormed());
+  assert.match(globalThis.MD.audit.buildOptimizePrompt({ fails: [], warns: [] }), /- 無 WARN/);
+  console.log("PASS 一鍵優化依 Unicode 字元截斷，保留完整 emoji 與空 WARN 文案");
 
   // 4. Test Scenario: Unrelated anonymous recipient views the normal shared link /p/<id>
   const anonPlayerRes = await worker.fetch(
