@@ -6,11 +6,16 @@
   "description": "Cloudflare Worker scaffold for minideck",
   "scripts": {
     "dev": "wrangler dev --port 8787",
-    "test": "node --import ./test/register-loader.mjs test/security.mjs && node --import ./test/register-loader.mjs test/token-client.mjs && node --import ./test/register-loader.mjs test/storage-cleanup.mjs && node --import ./test/register-loader.mjs test/frontend.mjs && node --import ./test/register-loader.mjs test/judge-mock.mjs && node --import ./test/register-loader.mjs test/persona-historical-scope.mjs",
+    "test": "node --import ./test/register-loader.mjs test/security.mjs && node --import ./test/register-loader.mjs test/token-client.mjs && node --import ./test/register-loader.mjs test/storage-cleanup.mjs && node --import ./test/register-loader.mjs test/frontend.mjs && node --import ./test/register-loader.mjs test/judge-mock.mjs && node --import ./test/register-loader.mjs test/persona-historical-scope.mjs && node --import ./test/register-loader.mjs --test test/pre-stream-recovery.mjs && node --test test/ui-dom.mjs && node test/presentation-job-lease.mjs && node --test workers/presentation-studio-runner/test/contract.test.mjs && node --test workers/presentation-studio-mcp/test/contract.test.mjs workers/presentation-studio-mcp/test/owner-idempotency-runtime.test.mjs && npm run test:publication",
+    "test:publication": "node --test test/publication.mjs test/publication-ui.mjs test/preview-isolation.mjs",
+    "test:browser": "node test/browser-adoption.mjs",
+    "test:worker": "node test/mcp-adoption.mjs",
     "check": "npm run test"
   },
   "devDependencies": {
+    "@playwright/test": "1.61.1",
     "html-to-image": "^1.11.13",
+    "jsdom": "^26.1.0",
     "pptxgenjs": "^4.0.1",
     "wrangler": "^4.115.0"
   }

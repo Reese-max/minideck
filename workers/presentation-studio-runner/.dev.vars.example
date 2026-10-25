@@ -1,0 +1,12 @@
+# Copy to .dev.vars for local Wrangler development.
+# Use the same random value as presentation-studio-mcp for the internal service call.
+PRESENTATION_RUNNER_TOKEN="replace-with-a-long-random-token"
+
+# Optional planner fallback for projects created without ChatGPT slideSpec.
+# Leave blank to require ChatGPT to provide a spec.
+CF_AI_ROUTER_URL="https://cf-ai-router-dev.irisx-tracker.workers.dev/v1/chat/completions"
+CF_AI_ROUTER_API_KEY=""
+CF_AI_ROUTER_MODEL="free-general"
+
+# Keep polling disabled during local development unless a local MCP service is available.
+POLLING_ENABLED="false"

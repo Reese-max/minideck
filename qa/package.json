@@ -1,0 +1,6 @@
+{
+  "private": true,
+  "type": "module",
+  "description": "Fixed Minideck PR44 stored-fixture Preview QA tooling only",
+  "devDependencies": { "wrangler": "4.135.0" }
+}

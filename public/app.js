@@ -185,6 +185,21 @@
     rollback(id, version) {
       return jsonRequest(`/api/projects/${id}/rollback`, { version }, id);
     },
+    publish(id, version) {
+      return jsonRequest(`/api/projects/${id}/publish`, { version }, id);
+    },
+    unpublish(id) {
+      return jsonRequest(`/api/projects/${id}/unpublish`, {}, id);
+    },
+    async preview(id, version) {
+      const query = version === undefined ? "" : `?version=${version}`;
+      const response = await fetch(`/api/projects/${id}/preview${query}`, {
+        cache: "no-store",
+        headers: projectHeaders(id),
+      });
+      if (!response.ok) throw await apiError(response);
+      return response.text();
+    },
     judge(id, version) {
       return jsonRequest(`/api/projects/${id}/judge`, { version }, id);
     },
@@ -371,15 +386,21 @@
     },
 
     buildOptimizePrompt(report) {
-      return [
+      const warns = report.warns || [];
+      const shown = warns.slice(0, 8);
+      const lines = [
         "目前稽核 WARN 清單：",
-        ...(report.warns.length
-          ? report.warns.map((item) => `- ${item.detail}`)
+        ...(shown.length
+          ? shown.map((item) => `- ${item.detail}`)
           : ["- 無 WARN"]),
+        ...(warns.length > 8
+          ? [`- 另有 ${warns.length - 8} 項同類問題，請一併處理。`]
+          : []),
         "",
         "強化視覺層級與留白平衡，維持所有內容不變",
         "不要新增或清空圖片佔位符。",
-      ].join("\n");
+      ];
+      return [...lines.join("\n")].slice(0, 1000).join("");
     },
 
     buildIterationPrompt(report, steer = "") {
@@ -547,6 +568,12 @@
 
   const form = document.querySelector("#brief-form");
   if (!form) return;
+  const briefInput = document.querySelector("#brief-input");
+  const pageCount = document.querySelector("#page-count");
+  const briefLimitNote = document.querySelector("#brief-limit");
+  const chatInput = document.querySelector("#chat-input");
+  const chatSubmit = document.querySelector("#chat-submit");
+  const chatLog = document.querySelector("#chat-log");
   const submitButton = form.querySelector('button[type="submit"]');
   const frame = document.querySelector("#deck-frame");
   const optimizeButton = document.querySelector("#btn-optimize");
@@ -563,7 +590,13 @@
   const pdfButton = document.querySelector("#btn-pdf");
   const pptxButton = document.querySelector("#btn-pptx");
   const shareButton = document.querySelector("#btn-share");
-  const downloadButtons = [htmlButton, pdfButton, pptxButton, shareButton];
+  const publishButton = document.querySelector("#btn-publish");
+  const unpublishButton = document.querySelector("#btn-unpublish");
+  const playerPreviewButton = document.querySelector("#btn-player-preview");
+  const playerPreview = document.querySelector("#player-preview");
+  const publicationStatus = document.querySelector("#publication-status");
+  const publicationFeedback = document.querySelector("#publication-feedback");
+  const downloadButtons = [htmlButton, pdfButton, pptxButton];
   const versionList = document.querySelector("#version-list");
   const previewVersion = document.querySelector("[data-preview-version]");
   const turnstileBox = document.querySelector("#cf-turnstile");
@@ -582,6 +615,8 @@
   let currentAudit = null;
   let currentProjectId = "";
   let currentDeckVersion = 0;
+  let publication = null;
+  let previewRequest = 0;
   let iterationRunning = false;
   let iterationStopRequested = false;
 
@@ -607,7 +642,45 @@
     downloadButtons.forEach((button) => {
       button.disabled = busy || !currentProjectId || !currentDeckVersion;
     });
+    publishButton.disabled = busy || !currentDeckVersion || publication?.published_version === currentDeckVersion;
+    publishButton.textContent = currentDeckVersion ? `發布 v${currentDeckVersion}` : "發布";
+    playerPreviewButton.disabled = busy || !currentDeckVersion;
+    unpublishButton.disabled = busy || !publication?.published_version;
+    shareButton.disabled = busy || !publication?.published_version;
+    versionList.querySelectorAll("button").forEach((button) => { button.disabled = busy; });
     form.setAttribute("aria-busy", String(busy));
+    syncChatComposer();
+  }
+
+  function syncChatComposer() {
+    const unavailable = busy || !currentProjectId || !currentDeckVersion;
+    chatInput.disabled = unavailable;
+    chatSubmit.disabled = unavailable || !chatInput.value.trim();
+  }
+
+  function pageInstruction() {
+    return `\n\n請產生 ${pageCount.value} 頁。`;
+  }
+
+  function syncBriefLimit() {
+    const limit = 2000 - [...pageInstruction()].length;
+    briefInput.maxLength = limit;
+    const count = [...briefInput.value.trim()].length;
+    const error = count > limit ? `簡報需求不可超過 ${limit} 字（已保留頁數指令空間）` : "";
+    briefInput.setCustomValidity(error);
+    briefLimitNote.textContent = error || `簡報需求最多 ${limit} 字（已保留頁數指令空間，目前 ${count} 字）。`;
+    return limit;
+  }
+
+  function appendChatMessage(role, text) {
+    const row = document.createElement("div");
+    row.className = `message ${role}-message`;
+    const body = document.createElement("p");
+    body.textContent = text;
+    row.append(body);
+    chatLog.append(row);
+    chatLog.scrollTop = chatLog.scrollHeight;
+    return body;
   }
 
   function syncHqMode() {
@@ -732,6 +805,13 @@
       time.textContent = formatTime(item.created_at);
       meta.append(title, time);
 
+      const previewButton = document.createElement("button");
+      previewButton.className = "outline-button version-rollback";
+      previewButton.type = "button";
+      previewButton.textContent = "預覽";
+      previewButton.setAttribute("aria-label", `預覽 v${item.version}`);
+      previewButton.addEventListener("click", () => previewPlayer(id, item.version));
+
       const button = document.createElement("button");
       button.className = "outline-button version-rollback";
       button.type = "button";
@@ -749,8 +829,7 @@
             `source=${item.version}`,
             `version=${result.version}`,
           );
-          const project = await MD.api.getProject(id);
-          renderVersions(id, project.versions);
+          await refreshVersions(id);
           await loadPreview(id, result.version);
           currentProjectId = id;
           await auditAndFix(id, false);
@@ -761,16 +840,39 @@
           });
         }
       });
-      row.append(meta, button);
+      row.append(meta, previewButton, button);
       rows.append(row);
     }
   }
 
   async function refreshVersions(id) {
     const project = await MD.api.getProject(id);
+    publication = project;
+    const draft = project.current_version;
+    const published = project.published_version;
+    const changes = draft - (published ?? 0);
+    publicationStatus.textContent = `草稿 v${draft} · ${published ? `已發布 v${published}` : "尚未發布"} · ${changes ? `有 ${changes} 個未發布變更` : "所有變更已發布"}`;
     renderVersions(id, project.versions);
     iteratePanel.querySelector(".iterate-quota").textContent = `已用修訂額度 ${reviseQuotaUsed(project)} / 6`;
+    setBusy(busy);
     return project;
+  }
+
+  async function previewPlayer(id, version) {
+    const request = ++previewRequest;
+    const previewFrame = playerPreview.querySelector("iframe");
+    const status = playerPreview.querySelector("[data-player-preview-status]");
+    previewFrame.removeAttribute("srcdoc");
+    status.textContent = `正在載入 v${version}⋯`;
+    playerPreview.showModal();
+    try {
+      const html = await MD.api.preview(id, version);
+      if (request !== previewRequest || !playerPreview.open) return;
+      previewFrame.srcdoc = html;
+      status.textContent = `預覽 v${version}（僅擁有者可見），不會更新公開連結。`;
+    } catch (error) {
+      if (request === previewRequest && playerPreview.open) status.textContent = `預覽失敗：${error.message}`;
+    }
   }
 
   async function fillAndSave(id, html) {
@@ -941,6 +1043,8 @@ html,body{margin:0!important;padding:0!important;background:#fff!important}
 
     async share() {
       if (!currentProjectId) throw new Error("目前沒有可分享的簡報");
+      const project = await refreshVersions(currentProjectId);
+      if (!project.published_version) throw new Error("簡報尚未發布，請先預覽並發布");
       const url = `${location.origin}/p/${currentProjectId}`;
       await navigator.clipboard.writeText(url);
       return url;
@@ -1273,7 +1377,7 @@ html,body{margin:0!important;padding:0!important;background:#fff!important}
     document.querySelector(".audit-summary").textContent = "尚未執行";
     document.querySelector(".audit-list").innerHTML =
       '<div class="audit-item"><strong>待執行</strong><span>目前尚無稽核結果。</span></div>';
-    document.querySelector("#chat-log").innerHTML =
+    chatLog.innerHTML =
       '<div class="message assistant-message"><p>請先生成簡報。</p></div>';
     document.querySelectorAll("#export-buttons button").forEach((button) => {
       button.disabled = true;
@@ -1281,6 +1385,9 @@ html,body{margin:0!important;padding:0!important;background:#fff!important}
     currentAudit = null;
     currentProjectId = "";
     currentDeckVersion = 0;
+    publication = null;
+    publicationStatus.textContent = "草稿 v0 · 尚未發布";
+    publicationFeedback.textContent = "編輯與儲存只會更新草稿；按發布才會更新公開連結。";
     iterationRunning = false;
     iterationStopRequested = false;
     resetIterationPanel();
@@ -1288,6 +1395,8 @@ html,body{margin:0!important;padding:0!important;background:#fff!important}
     hqResultBody.replaceChildren();
     iterateSteerInput.value = "";
     submitButton.disabled = true;
+    chatInput.value = "";
+    syncChatComposer();
   }
 
   async function runExport(button, label, action) {
@@ -1340,6 +1449,69 @@ html,body{margin:0!important;padding:0!important;background:#fff!important}
       console.log("MD share_link_copied", url);
     }),
   );
+
+  chatInput.addEventListener("input", syncChatComposer);
+  chatInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && !event.isComposing) {
+      event.preventDefault();
+      chatSubmit.click();
+    }
+  });
+
+  chatSubmit.addEventListener("click", async () => {
+    if (busy || !currentProjectId || !currentDeckVersion) return;
+    const message = chatInput.value.trim();
+    if (!message) return;
+    if ([...message].length > 1000) {
+      appendChatMessage("assistant", "修訂指令不可超過 1000 字。");
+      return;
+    }
+    const id = currentProjectId;
+    appendChatMessage("user", message);
+    const reply = appendChatMessage("assistant", "正在修訂簡報⋯");
+    setBusy(true);
+    try {
+      setStage("revise", "active", "依修訂對話更新簡報⋯");
+      const revised = await MD.api.revise(id, message);
+      const html = await fetchDeck(id, revised.version);
+      await fillAndSave(id, html);
+      await auditAndFix(id, false);
+      reply.textContent = `已完成修訂，簡報更新為 v${currentDeckVersion}。`;
+      chatInput.value = "";
+    } catch (error) {
+      reply.textContent = error?.message ?? "修訂失敗，請稍後再試。";
+      showError(error);
+    } finally {
+      setBusy(false);
+    }
+  });
+
+  playerPreviewButton.addEventListener("click", () => previewPlayer(currentProjectId, currentDeckVersion));
+  playerPreview.querySelector("button").addEventListener("click", () => playerPreview.close());
+  playerPreview.addEventListener("close", () => {
+    previewRequest++;
+    playerPreview.querySelector("iframe").removeAttribute("srcdoc");
+  });
+  for (const [button, unpublish] of [[publishButton, false], [unpublishButton, true]]) {
+    button.addEventListener("click", async () => {
+      if (busy || !currentProjectId) return;
+      setBusy(true);
+      publicationFeedback.textContent = unpublish ? "正在下線⋯" : `正在發布 v${currentDeckVersion}⋯`;
+      try {
+        const receipt = unpublish
+          ? await MD.api.unpublish(currentProjectId)
+          : await MD.api.publish(currentProjectId, currentDeckVersion);
+        await refreshVersions(currentProjectId);
+        publicationFeedback.textContent = unpublish
+          ? "已下線，公開連結無法再讀取簡報；草稿與版本均保留。"
+          : `已發布 v${receipt.published_version}（${formatTime(receipt.published_at)}），公開連結已更新。`;
+      } catch (error) {
+        publicationFeedback.textContent = `${unpublish ? "下線" : "發布"}失敗：${error.message}`;
+      } finally {
+        setBusy(false);
+      }
+    });
+  }
 
   optimizeButton.addEventListener("click", async () => {
     if (busy || !currentProjectId || !currentAudit) return;
@@ -1473,6 +1645,8 @@ html,body{margin:0!important;padding:0!important;background:#fff!important}
   });
 
   hqMode.addEventListener("change", syncHqMode);
+  briefInput.addEventListener("input", syncBriefLimit);
+  pageCount.addEventListener("change", syncBriefLimit);
 
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -1482,14 +1656,14 @@ html,body{margin:0!important;padding:0!important;background:#fff!important}
       return;
     }
 
-    const brief = document.querySelector("#brief-input").value.trim();
-    const pages = document.querySelector("#page-count").value;
+    const brief = briefInput.value.trim();
     const style = styleSelect.value;
     const sourceData = document.querySelector("#source-data").value.trim();
     const highQuality = hqMode.checked;
-    const fullBrief = `${brief}\n\n請產生 ${pages} 頁。`;
+    const briefLimit = syncBriefLimit();
+    const fullBrief = `${brief}${pageInstruction()}`;
     if ([...fullBrief].length > 2000) {
-      showError(new Error("簡報需求加上頁數後不可超過 2000 字"));
+      showError(new Error(`簡報需求不可超過 ${briefLimit} 字（已保留頁數指令空間）`));
       return;
     }
 
@@ -1499,7 +1673,9 @@ html,body{margin:0!important;padding:0!important;background:#fff!important}
     hqResultBody.replaceChildren();
     try {
       const { id } = await MD.api.createProject(fullBrief, turnstileToken);
+      resetShell();
       currentProjectId = id;
+      await refreshVersions(id);
       history.replaceState(null, "", `#p=${id}`);
       console.log("MD project_created", `project=${id}`);
       await refreshQuota();
@@ -1518,6 +1694,7 @@ html,body{margin:0!important;padding:0!important;background:#fff!important}
   });
 
   resetShell();
+  syncBriefLimit();
   syncHqMode();
   initializeTurnstile();
   refreshQuota().catch(() => {});

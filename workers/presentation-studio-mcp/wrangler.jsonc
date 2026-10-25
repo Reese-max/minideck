@@ -1,0 +1,27 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "presentation-studio-mcp",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-28",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "presentation-studio",
+      "database_id": "f90f04e3-651d-4280-8325-7466b5dc1765"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "BUCKET",
+      "bucket_name": "minideck"
+    }
+  ],
+  "vars": {
+    "ARCHITECTURE_VERSION": "2.0.0",
+    "DEFAULT_PROFILE_ID": "cpu-police-academic-v1",
+    "R2_PREFIX": "presentation-studio/",
+    "PRESENTATION_RUNNER_STATUS": "pending"
+  }
+}

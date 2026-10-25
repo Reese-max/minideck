@@ -6,6 +6,8 @@ CREATE TABLE projects(
   brief TEXT,
   access_token_hash TEXT,
   current_version INTEGER DEFAULT 0,
+  published_version INTEGER DEFAULT NULL,
+  published_at INTEGER DEFAULT NULL,
   status TEXT DEFAULT 'new'
 );
 

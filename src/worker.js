@@ -20,6 +20,7 @@ import {
   appendProjectMessage,
   assertD1Initialized,
   claimProject,
+  deckValidationError,
   deleteProjectData,
   getProject,
   readDeck,
@@ -28,6 +29,7 @@ import {
   releaseProject,
   rollbackDeckVersion,
   saveDeckVersion,
+  setPublishedVersion,
 } from "./store.js";
 
 function json(data, status = 200) {
@@ -198,8 +200,8 @@ async function createProject(request, env) {
   return json({ id, token });
 }
 
-async function reserveText(env, id, reserveRevise) {
-  const day = utcDay();
+async function reserveText(env, id, reserveRevise, reservation) {
+  const day = reservation.day;
   if (
     !(await checkAndIncrement(
       env.DB,
@@ -208,22 +210,30 @@ async function reserveText(env, id, reserveRevise) {
       limit(env, "LIMIT_GLOBAL_TEXT"),
     ))
   ) {
-    return null;
+    return false;
   }
+  reservation.scopes.push(["global:text", day]);
 
-  if (
-    reserveRevise &&
-    !(await checkAndIncrement(
+  if (reserveRevise) {
+    if (!(await checkAndIncrement(
       env.DB,
       `proj:${id}:revises`,
       "all",
       limit(env, "LIMIT_PROJECT_REVISES"),
-    ))
-  ) {
-    await refund(env.DB, "global:text", day);
-    return null;
+    ))) return false;
+    reservation.scopes.push([`proj:${id}:revises`, "all"]);
   }
-  return day;
+  return true;
+}
+
+// Only refund writes confirmed for this request; an INSERT error must never
+// decrement quota already consumed by another request. Attempt every refund.
+async function refundTextReservation(env, reservation) {
+  const results = await Promise.allSettled(
+    reservation.scopes.map(([scope, day]) => refund(env.DB, scope, day)),
+  );
+  const failed = results.find((result) => result.status === "rejected");
+  if (failed) throw failed.reason;
 }
 
 function publicTextError(error) {
@@ -279,11 +289,20 @@ async function generateDeck(request, env, ctx, id) {
   if (!claimed) return json({ error: "專案正在生成中" }, 409);
 
   const project = access.project;
-  const day = await reserveText(env, id, false);
-  if (!day) {
-    await releaseProject(env.DB, id);
-    return json({ error: "今日額度已滿" }, 429);
+  const reservation = { day: utcDay(), scopes: [] };
+  let prepared = false;
+  try {
+    if (!(await reserveText(env, id, false, reservation))) {
+      return json({ error: "今日額度已滿" }, 429);
+    }
+    prepared = true;
+  } finally {
+    if (!prepared) {
+      try { await refundTextReservation(env, reservation); }
+      finally { await releaseProject(env.DB, id); }
+    }
   }
+  const day = reservation.day;
 
   return streamDeck({
     apiKey: env.MINIMAX_API_KEY,
@@ -424,12 +443,21 @@ async function reviseDeck(request, env, ctx, id) {
   const claimed = await claimProject(env.DB, id);
   if (!claimed) return json({ error: "專案正在生成中" }, 409);
 
-  const day = await reserveText(env, id, true);
-  if (!day) {
-    await releaseProject(env.DB, id);
-    return json({ error: "今日額度已滿" }, 429);
+  const reservation = { day: utcDay(), scopes: [] };
+  let prepared = false, html;
+  try {
+    if (!(await reserveText(env, id, true, reservation))) {
+      return json({ error: "今日額度已滿" }, 429);
+    }
+    html = await current.deck.object.text();
+    prepared = true;
+  } finally {
+    if (!prepared) {
+      try { await refundTextReservation(env, reservation); }
+      finally { await releaseProject(env.DB, id); }
+    }
   }
-  const html = await current.deck.object.text();
+  const day = reservation.day;
 
   return streamDeck({
     apiKey: env.MINIMAX_API_KEY,
@@ -553,20 +581,8 @@ async function saveDeck(request, env, id) {
 
   const body = await requestJson(request);
   if (!body) return json({ error: "請提供有效的 JSON 請求" }, 400);
-  if (typeof body.html !== "string") {
-    return json({ error: "請提供 HTML 簡報" }, 400);
-  }
-  if (new TextEncoder().encode(body.html).byteLength > 2 * 1024 * 1024) {
-    return json({ error: "HTML 簡報不可超過 2MB" }, 413);
-  }
-  if (
-    (body.html.match(/<section\s+class=["']slide["'][^>]*>/gi) ?? []).length < 3
-  ) {
-    return json({ error: "HTML 簡報至少需要 3 頁" }, 400);
-  }
-  if ((body.html.match(/data-gen-prompt\s*=/gi) ?? []).length > 12) {
-    return json({ error: "HTML 簡報的圖片佔位符不可超過 12 個" }, 400);
-  }
+  const validationError = deckValidationError(body.html, { requireComplete: false });
+  if (validationError) return json({ error: validationError.message }, validationError.status);
 
   const claimed = await claimProject(env.DB, id);
   if (claimed === null) return json({ error: "專案不存在" }, 404);
@@ -588,6 +604,37 @@ async function saveDeck(request, env, id) {
   } catch (error) {
     await releaseProject(env.DB, id);
     throw error;
+  }
+}
+
+async function publishProject(request, env, id, unpublish = false) {
+  const access = await authorizeProject(request, env, id);
+  if (access.response) return access.response;
+
+  let version = null;
+  if (!unpublish) {
+    const body = await requestJson(request);
+    if (!body || !Number.isSafeInteger(body.version) || body.version < 1) {
+      return json({ error: "版本編號無效" }, 400);
+    }
+    version = body.version;
+  }
+
+  const claimed = await claimProject(env.DB, id);
+  if (claimed === null) return json({ error: "專案不存在" }, 404);
+  if (!claimed) return json({ error: "專案正在生成中" }, 409);
+
+  try {
+    if (version !== null) {
+      const source = await readDeck(env.DB, env.BUCKET, id, version);
+      if (!source.deck) return json({ error: "找不到簡報版本" }, 404);
+      const validationError = deckValidationError(await source.deck.object.text());
+      if (validationError) return json({ error: validationError.message }, validationError.status);
+    }
+    const receipt = await setPublishedVersion(env.DB, id, version);
+    return receipt ? json(receipt) : json({ error: "找不到簡報版本" }, 404);
+  } finally {
+    await releaseProject(env.DB, id);
   }
 }
 
@@ -647,7 +694,7 @@ async function getImageResponse(env, hash) {
   return new Response(object.body, { headers });
 }
 
-async function getPlayerResponse(request, env, id) {
+async function getPlayerResponse(request, env, id, preview = false) {
   if (!id || !/^[a-zA-Z0-9_-]{1,64}$/.test(id)) {
     return json({ error: "專案識別碼無效" }, 400);
   }
@@ -655,22 +702,26 @@ async function getPlayerResponse(request, env, id) {
   const versionText = url.searchParams.get("version");
   let requestedVersion = null;
   if (versionText !== null) {
-    if (!/^\d+$/.test(versionText) || Number(versionText) < 1) {
+    if (!/^\d+$/.test(versionText) || !Number.isSafeInteger(Number(versionText)) || Number(versionText) < 1) {
       return json({ error: "版本編號無效" }, 400);
     }
     requestedVersion = Number(versionText);
   }
 
-  const result = await readDeck(env.DB, env.BUCKET, id, requestedVersion);
-  if (!result.project) return json({ error: "專案不存在" }, 404);
-  if (!result.deck) return json({ error: "找不到簡報版本" }, 404);
+  const project = await getProject(env.DB, id);
+  if (!project) return json({ error: "專案不存在" }, 404);
 
-  if (requestedVersion !== null && requestedVersion !== Number(result.project.current_version)) {
+  if (preview || (requestedVersion !== null && requestedVersion !== project.published_version)) {
     const token = request.headers.get("X-Project-Token")?.trim();
-    if (!(await verifyProjectToken(token, result.project.access_token_hash))) {
-      return json({ error: "歷史版本不公開，需專案權杖" }, 403);
+    if (!(await verifyProjectToken(token, project.access_token_hash))) {
+      return json({ error: "未發布版本不公開，需專案權杖" }, 403);
     }
   }
+
+  const version = requestedVersion ?? (preview ? project.current_version : project.published_version);
+  if (!version) return json({ error: "簡報尚未發布" }, 404);
+  const result = await readDeck(env.DB, env.BUCKET, id, version);
+  if (!result.deck) return json({ error: "找不到簡報版本" }, 404);
 
   const templateResponse = await env.ASSETS.fetch(
     new URL("/play.html", request.url),
@@ -716,7 +767,7 @@ export default {
       }
 
       const actionMatch = url.pathname.match(
-        /^\/api\/projects\/([^/]+)\/(generate|revise|image|rollback|judge)$/,
+        /^\/api\/projects\/([^/]+)\/(generate|revise|image|rollback|judge|publish|unpublish)$/,
       );
       if (actionMatch && request.method === "POST") {
         const [, id, action] = actionMatch;
@@ -726,7 +777,15 @@ export default {
         if (action === "revise") return await reviseDeck(request, env, ctx, id);
         if (action === "rollback") return await rollbackDeck(request, env, id);
         if (action === "judge") return await judgeDeckVersion(request, env, id);
+        if (action === "publish" || action === "unpublish") {
+          return await publishProject(request, env, id, action === "unpublish");
+        }
         return await generateProjectImage(request, env, id);
+      }
+
+      const previewMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/preview$/);
+      if (previewMatch && request.method === "GET") {
+        return await getPlayerResponse(request, env, previewMatch[1], true);
       }
 
       const projectMatch = url.pathname.match(/^\/api\/projects\/([^/]+)$/);

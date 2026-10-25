@@ -1,0 +1,6 @@
+{
+  "scope": "minideck-qa-REPLACE",
+  "siteD1Id": "REPLACE_WITH_FRESH_APPROVED_LEGACY_D1_UUID",
+  "studioD1Id": "REPLACE_WITH_FRESH_APPROVED_STUDIO_D1_UUID",
+  "bucket": "REPLACE_WITH_SCOPE-assets"
+}
