@@ -37,7 +37,8 @@
 
         <form id="brief-form" class="form-controls--with-style">
           <label class="sr-only" for="brief-input">簡報需求</label>
-          <textarea id="brief-input" name="brief" maxlength="2000" placeholder="例如：為投資人做一份 B 輪募資簡報，聚焦 2026 上半年營收成長、產品線擴張與市場切入策略；語氣專業自信。"></textarea>
+          <textarea id="brief-input" name="brief" maxlength="1989" aria-describedby="brief-limit" placeholder="例如：為投資人做一份 B 輪募資簡報，聚焦 2026 上半年營收成長、產品線擴張與市場切入策略；語氣專業自信。"></textarea>
+          <p id="brief-limit" aria-live="polite">0 / 1989 字（已預留頁數指示）</p>
 
           <label class="source-field" for="source-data">
             <span>參考資料（選填，最多 3000 字）</span>
