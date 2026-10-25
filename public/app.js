@@ -565,6 +565,9 @@
   const shareButton = document.querySelector("#btn-share");
   const downloadButtons = [htmlButton, pdfButton, pptxButton, shareButton];
   const versionList = document.querySelector("#version-list");
+  const chatInput = document.querySelector("#chat-input");
+  const chatLog = document.querySelector("#chat-log");
+  const chatSendButton = document.querySelector(".chat-composer button");
   const previewVersion = document.querySelector("[data-preview-version]");
   const turnstileBox = document.querySelector("#cf-turnstile");
   const stageNames = ["generate", "images", "audit", "revise"];
@@ -604,6 +607,8 @@
     iterateButton.disabled = busy || !currentProjectId || !currentAudit;
     iterateStopButton.disabled = !iterationRunning;
     iterateSteerInput.disabled = !currentProjectId || (busy && !iterationRunning);
+    chatSendButton.disabled = busy || !currentProjectId || !currentDeckVersion;
+    chatInput.disabled = chatSendButton.disabled;
     downloadButtons.forEach((button) => {
       button.disabled = busy || !currentProjectId || !currentDeckVersion;
     });
@@ -619,7 +624,7 @@
     turnstileToken = "";
     turnstileBox.classList.add("is-error");
     turnstileBox.textContent = message;
-    setBusy(false);
+    setBusy(busy);
   }
 
   function initializeTurnstile() {
@@ -636,11 +641,11 @@
         callback(token) {
           turnstileToken = token;
           turnstileBox.classList.remove("is-error");
-          setBusy(false);
+          setBusy(busy);
         },
         "expired-callback"() {
           turnstileToken = "";
-          setBusy(false);
+          setBusy(busy);
         },
         "error-callback"() {
           turnstileError("Turnstile 驗證失敗，請重新整理後再試。");
@@ -1273,7 +1278,7 @@ html,body{margin:0!important;padding:0!important;background:#fff!important}
     document.querySelector(".audit-summary").textContent = "尚未執行";
     document.querySelector(".audit-list").innerHTML =
       '<div class="audit-item"><strong>待執行</strong><span>目前尚無稽核結果。</span></div>';
-    document.querySelector("#chat-log").innerHTML =
+    chatLog.innerHTML =
       '<div class="message assistant-message"><p>請先生成簡報。</p></div>';
     document.querySelectorAll("#export-buttons button").forEach((button) => {
       button.disabled = true;
@@ -1287,8 +1292,45 @@ html,body{margin:0!important;padding:0!important;background:#fff!important}
     hqResult.hidden = true;
     hqResultBody.replaceChildren();
     iterateSteerInput.value = "";
+    chatInput.value = "";
+    chatInput.disabled = true;
+    chatSendButton.disabled = true;
     submitButton.disabled = true;
   }
+
+  function appendChatMessage(role, text) {
+    const message = document.createElement("div");
+    message.className = `message ${role}-message`;
+    const content = document.createElement("p");
+    content.textContent = text;
+    message.append(content);
+    chatLog.append(message);
+    return content;
+  }
+
+  chatSendButton.addEventListener("click", async () => {
+    const message = chatInput.value.trim();
+    if (busy || !currentProjectId || !currentDeckVersion || !message) return;
+    const id = currentProjectId;
+    setBusy(true);
+    if (!chatLog.querySelector(".user-message")) chatLog.replaceChildren();
+    appendChatMessage("user", message);
+    const reply = appendChatMessage("assistant", "正在修訂⋯");
+    try {
+      setStage("revise", "active", "依修訂指令更新簡報⋯");
+      const revised = await MD.api.revise(id, message);
+      const html = await fetchDeck(id, revised.version);
+      await fillAndSave(id, html);
+      await auditAndFix(id, false);
+      reply.textContent = `已完成修訂（版本 v${currentDeckVersion}）。`;
+      chatInput.value = "";
+    } catch (error) {
+      reply.textContent = `修訂失敗：${error?.message ?? "請稍後再試"}`;
+      showError(error);
+    } finally {
+      setBusy(false);
+    }
+  });
 
   async function runExport(button, label, action) {
     const original = button.innerHTML;
@@ -1522,5 +1564,6 @@ html,body{margin:0!important;padding:0!important;background:#fff!important}
   initializeTurnstile();
   refreshQuota().catch(() => {});
   addEventListener("resize", fitPreview);
-  resume().catch(showError);
+  setBusy(true);
+  resume().catch(showError).finally(() => setBusy(false));
 })();

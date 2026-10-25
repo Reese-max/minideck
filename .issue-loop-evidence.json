@@ -1,0 +1,12 @@
+{
+  "repo": "Reese-max/minideck",
+  "issue": 40,
+  "base_sha": "d8997a74e77108b8bb2d21efe205493db26b4552",
+  "red_proof": "Before implementation: node --test test/chat-revise.mjs exited 1 (tests 4, pass 0, fail 4). chat click posts the input to revise and refreshes preview, versions and messages: AssertionError [ERR_ASSERTION]: Expected values to be strictly equal: + actual - expected; + undefined; - '/api/projects/project/revise'. chat is disabled without a project or deck and ignores blank input: false !== true. chat is disabled while revising and prevents duplicate submissions: false !== true. Review regressions also ran red before their fixes (tests 6, pass 4, fail 2): AssertionError [ERR_ASSERTION]: callback must not unlock the revision; false !== true. AssertionError [ERR_ASSERTION]: resume must hold the busy lock until auto-revision completes; false !== true.",
+  "test_command": "npm run check",
+  "test_exit": 0,
+  "tests_passed": 6,
+  "tests_failed": 0,
+  "summary": "Wired the revision chat button to the existing MD.api.revise(currentProjectId, message), then reused image filling, preview, version history and audit flows. User instructions and assistant status/error messages are rendered as plain text; controls are disabled without a project/deck or while busy, duplicate/blank submissions are ignored, and failed revisions retain the input for retry. Turnstile callbacks preserve the busy lock and project resume holds it through automatic revision. All six existing test entrypoints and six new DOM regression cases pass via npm run check in Git Bash, and README documents the browser interaction.",
+  "not_done": "No push, PR, merge or deployment; external actions remain with the driver. Real-browser and real-provider smoke tests were not run. Dedicated lint, typecheck, build, coverage-ratchet, CRAP and mutation scripts are not configured in this repository; none were added."
+}
