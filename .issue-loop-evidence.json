@@ -1,0 +1,12 @@
+{
+  "repo": "Reese-max/minideck",
+  "issue": 39,
+  "base_sha": "d8997a74e77108b8bb2d21efe205493db26b4552",
+  "red_proof": "Command: node --import ./test/register-loader.mjs --test test/generation-cleanup.mjs\nExit code: 1\ntests 14; pass 5; fail 9\n✖ failing tests:\n\ntest at test\\generation-cleanup.mjs:92:3\n✖ generate: quota INSERT failure releases the project and allows deletion (35.5332ms)\n  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:\n  + actual - expected\n  \n  + 'generating'\n  - 'new'\n  \n      at Object.assertReleased (file:///C:/Users/Administrator/issue-loop/worktrees/Reese-max_minideck-issue-39/test/generation-cleanup.mjs:81:14)\n      at async TestContext.<anonymous> (file:///C:/Users/Administrator/issue-loop/worktrees/Reese-max_minideck-issue-39/test/generation-cleanup.mjs:99:5)\n      at async Test.run (node:internal/test_runner/test:1404:7)\n      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {\n    generatedMessage: true,\n    code: 'ERR_ASSERTION',\n    actual: 'generating',\n    expected: 'new',\n    operator: 'strictEqual',\n    diff: 'simple'\n  }\n",
+  "test_command": "npm run check",
+  "test_exit": 0,
+  "tests_passed": 14,
+  "tests_failed": 0,
+  "summary": "generateDeck 與 reviseDeck 在 claim 成功後以 try/finally 保護串流交接前的流程，發生例外或額度不足時釋放專案鎖。reserveText 在修訂額度預留失敗時退還已預留的 global:text；完整預留後、串流前發生例外則退還本次文字與修訂額度，且不消耗重試額度。新增 14 個 HTTP／SQLite 回歸案例，驗證 quota INSERT 與 R2 正文讀取失敗後的狀態、可刪除／可重試、串流鎖與既有成功／失敗結算，並更新 README。Git Bash 執行 npm run check 通過全部 6 支既有測試腳本及 14 個新增案例。",
+  "not_done": "未 push、未開 PR、未合併或部署；外部動作由 driver 負責。未執行 Preview／Production 或真實 D1／R2／MiniMax 驗收；本機使用 SQLite 與 mock bindings。專案未提供獨立 lint、typecheck、build、coverage、CRAP 或 mutation 指令，本次未新增工具。"
+}

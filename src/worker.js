@@ -211,19 +211,18 @@ async function reserveText(env, id, reserveRevise) {
     return null;
   }
 
-  if (
-    reserveRevise &&
-    !(await checkAndIncrement(
+  let reserved = false;
+  try {
+    reserved = !reserveRevise || await checkAndIncrement(
       env.DB,
       `proj:${id}:revises`,
       "all",
       limit(env, "LIMIT_PROJECT_REVISES"),
-    ))
-  ) {
-    await refund(env.DB, "global:text", day);
-    return null;
+    );
+    return reserved ? day : null;
+  } finally {
+    if (!reserved) await refund(env.DB, "global:text", day);
   }
-  return day;
 }
 
 function publicTextError(error) {
@@ -278,37 +277,47 @@ async function generateDeck(request, env, ctx, id) {
   if (claimed === null) return json({ error: "專案不存在" }, 404);
   if (!claimed) return json({ error: "專案正在生成中" }, 409);
 
-  const project = access.project;
-  const day = await reserveText(env, id, false);
-  if (!day) {
-    await releaseProject(env.DB, id);
-    return json({ error: "今日額度已滿" }, 429);
-  }
+  let day;
+  let streaming = false;
+  try {
+    day = await reserveText(env, id, false);
+    if (!day) return json({ error: "今日額度已滿" }, 429);
 
-  return streamDeck({
-    apiKey: env.MINIMAX_API_KEY,
-    messages: [
-      {
-        role: "user",
-        content: `請依以下需求產生簡報：\n${project.brief}`,
+    const response = streamDeck({
+      apiKey: env.MINIMAX_API_KEY,
+      messages: [
+        {
+          role: "user",
+          content: `請依以下需求產生簡報：\n${access.project.brief}`,
+        },
+      ],
+      style,
+      sourceData,
+      ctx,
+      signal: request.signal,
+      onComplete: async (html) => {
+        const version = await saveDeckVersion(
+          env.DB,
+          env.BUCKET,
+          id,
+          html,
+          "generate",
+        );
+        return { version, deckPath: `/api/projects/${id}/deck?version=${version}` };
       },
-    ],
-    style,
-    sourceData,
-    ctx,
-    signal: request.signal,
-    onComplete: async (html) => {
-      const version = await saveDeckVersion(
-        env.DB,
-        env.BUCKET,
-        id,
-        html,
-        "generate",
-      );
-      return { version, deckPath: `/api/projects/${id}/deck?version=${version}` };
-    },
-    onFailure: (error) => settleTextFailure(env, id, day, error, false),
-  });
+      onFailure: (error) => settleTextFailure(env, id, day, error, false),
+    });
+    streaming = true;
+    return response;
+  } finally {
+    if (!streaming) {
+      try {
+        if (day) await refund(env.DB, "global:text", day);
+      } finally {
+        await releaseProject(env.DB, id);
+      }
+    }
+  }
 }
 
 async function rollbackDeck(request, env, id) {
@@ -424,36 +433,52 @@ async function reviseDeck(request, env, ctx, id) {
   const claimed = await claimProject(env.DB, id);
   if (!claimed) return json({ error: "專案正在生成中" }, 409);
 
-  const day = await reserveText(env, id, true);
-  if (!day) {
-    await releaseProject(env.DB, id);
-    return json({ error: "今日額度已滿" }, 429);
-  }
-  const html = await current.deck.object.text();
+  let day;
+  let streaming = false;
+  try {
+    day = await reserveText(env, id, true);
+    if (!day) return json({ error: "今日額度已滿" }, 429);
+    const html = await current.deck.object.text();
 
-  return streamDeck({
-    apiKey: env.MINIMAX_API_KEY,
-    messages: [
-      {
-        role: "user",
-        content: `以下是目前最新版 HTML 簡報：\n${html}\n\n請依指令修訂並輸出完整新版 HTML：\n${message}`,
+    const response = streamDeck({
+      apiKey: env.MINIMAX_API_KEY,
+      messages: [
+        {
+          role: "user",
+          content: `以下是目前最新版 HTML 簡報：\n${html}\n\n請依指令修訂並輸出完整新版 HTML：\n${message}`,
+        },
+      ],
+      ctx,
+      signal: request.signal,
+      onComplete: async (revisedHtml) => {
+        const version = await saveDeckVersion(
+          env.DB,
+          env.BUCKET,
+          id,
+          revisedHtml,
+          "revise",
+          { user: message, assistant: revisedHtml },
+        );
+        return { version, deckPath: `/api/projects/${id}/deck?version=${version}` };
       },
-    ],
-    ctx,
-    signal: request.signal,
-    onComplete: async (revisedHtml) => {
-      const version = await saveDeckVersion(
-        env.DB,
-        env.BUCKET,
-        id,
-        revisedHtml,
-        "revise",
-        { user: message, assistant: revisedHtml },
-      );
-      return { version, deckPath: `/api/projects/${id}/deck?version=${version}` };
-    },
-    onFailure: (error) => settleTextFailure(env, id, day, error, true),
-  });
+      onFailure: (error) => settleTextFailure(env, id, day, error, true),
+    });
+    streaming = true;
+    return response;
+  } finally {
+    if (!streaming) {
+      try {
+        if (day) {
+          await Promise.all([
+            refund(env.DB, "global:text", day),
+            refund(env.DB, `proj:${id}:revises`, "all"),
+          ]);
+        }
+      } finally {
+        await releaseProject(env.DB, id);
+      }
+    }
+  }
 }
 
 async function generateProjectImage(request, env, id) {

@@ -197,6 +197,10 @@ HTTP 層錯誤一律為 `{"error":"<繁中文案>"}`，常見狀態碼為 403、
 
 建立專案同時檢查 IP 與全站額度；第二項失敗時會退還第一項。圖片 hash 快取命中不扣任何額度。所有上限由 `wrangler.toml` 的 `LIMIT_*` 變數控制。
 
+`generate`／`revise` 取得專案鎖後，若在啟動 SSE 串流前發生額度寫入或簡報正文讀取例外，會釋放專案鎖並退還本次已預留的文字／修訂額度，不消耗重試次數；專案可再次生成或刪除。串流啟動後則由既有完成／失敗流程結算額度並釋放鎖。
+
+本機回歸檢查使用 `npm run check`，包含 `test/generation-cleanup.mjs` 的 D1 寫入失敗、R2 正文讀取失敗、額度退還與鎖交接測試。
+
 ## 擴充風格 preset
 
 先在 `prompts/styles/` 加入一個 `.md`（只描述配色、字體氣質、版面密度與圖表風格）。由於 Worker 採靜態打包，接著在 `src/minimax.js` 匯入該檔並加入 `STYLE_PROMPTS`；若要在網頁選取，再於 `public/index.html` 的 `#style-select` 加入同名選項。重新啟動 Worker 後即可由 `generate` 的 `style` 欄位使用。
