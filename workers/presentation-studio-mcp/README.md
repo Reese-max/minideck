@@ -53,6 +53,8 @@ PRESENTATION_RUNNER_TOKEN Bearer secret and are not registered as MCP tools.
 Claim leases start at 60 minutes. Before each Workflow callback and retry,
 the runner renews only its current, unexpired attempt within finite attempt
 horizons; see [bounded lease renewal](../../docs/lease-renewal.md).
+Expired attempts are recovered on claim; exhausted attempts are blocked with a
+diagnostic reason. Renewal and completion are fenced to the current attempt.
 Completion accepts only constrained render/export result shapes.
 
 ## Local checks

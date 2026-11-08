@@ -664,7 +664,7 @@ async function renewJobLease(request: Request, env: Env): Promise<Response> {
   if (
     !body || Object.keys(body).some((key) => key !== "jobId" && key !== "attemptCount") ||
     !isUuid(jobId) || typeof attemptCount !== "number" ||
-    !Number.isInteger(attemptCount) || attemptCount < 1
+    !Number.isSafeInteger(attemptCount) || attemptCount < 1
   ) {
     return jsonResponse({ error: "invalid_renew_request" }, 400);
   }

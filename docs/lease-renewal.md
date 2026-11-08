@@ -29,7 +29,7 @@ These horizons preserve the original 3,600-second claim-to-dispatch allowance
 and sum the supported Workflow callback budgets. Existing explicit steps have
 two retries (three attempts), with 30- and 60-second exponential retry gaps:
 load = 990 seconds; plan / revision plan / judge = 1,890 seconds each;
-execute = 6,390 seconds. Existing unconfigured completion/failure steps use the
+execute = 6,390 seconds. Completion/failure steps explicitly pin the documented
 Workflow defaults: six attempts of ten minutes and gaps 10+20+40+80+160 seconds,
 or 3,910 seconds. Both terminal allowances are included: completion may exhaust
 its retries before the Workflow records a failure. The completion promise is

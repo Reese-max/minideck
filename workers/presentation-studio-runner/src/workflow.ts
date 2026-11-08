@@ -17,6 +17,12 @@ const RETRIES = {
   backoff: "exponential" as const,
 };
 
+// Pin the documented defaults used when calculating the finite lease horizons.
+const COMPLETION_OPTIONS = {
+  retries: { limit: 5, delay: "10 seconds" as const, backoff: "exponential" as const },
+  timeout: "10 minutes" as const,
+};
+
 function isObject(value: unknown): value is JsonObject {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
@@ -35,7 +41,7 @@ export class PresentationWorkflow extends WorkflowEntrypoint<RunnerEnv, Workflow
             return runPlanner(this.env, job) as any;
           },
         )) as DashiJobResult;
-        return await step.do(`complete planned job ${job.id}`, async () => {
+        return await step.do(`complete planned job ${job.id}`, COMPLETION_OPTIONS, async () => {
           await renewJob(this.env, job, 600);
           return completeJob(this.env, job, result!) as any;
         });
@@ -156,7 +162,7 @@ export class PresentationWorkflow extends WorkflowEntrypoint<RunnerEnv, Workflow
           };
         }
       }
-      return await step.do(`complete dashi job ${job.id}`, async () => {
+      return await step.do(`complete dashi job ${job.id}`, COMPLETION_OPTIONS, async () => {
         await renewJob(this.env, job, 600);
         return completeJob(this.env, job, result!) as any;
       });
@@ -165,7 +171,7 @@ export class PresentationWorkflow extends WorkflowEntrypoint<RunnerEnv, Workflow
         return { error: "job_lease_not_current", jobId: job.id };
       }
       try {
-        return await step.do(`record failed job ${job.id}`, async () => {
+        return await step.do(`record failed job ${job.id}`, COMPLETION_OPTIONS, async () => {
           await renewJob(this.env, job, 600);
           return completeFailure(this.env, job, error) as any;
         });

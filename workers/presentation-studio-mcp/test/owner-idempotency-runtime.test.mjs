@@ -11,7 +11,7 @@ import { runIdempotent } from "../src/idempotency.mjs";
 const root = new URL("../", import.meta.url);
 
 async function read(relativePath) {
-  return readFile(new URL(relativePath, root), "utf8");
+  return (await readFile(new URL(relativePath, root), "utf8")).replaceAll("\r\n", "\n");
 }
 
 test("uses the immutable GitHub subject for the owner namespace", async () => {

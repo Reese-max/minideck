@@ -104,7 +104,10 @@ function fixture({ type = "render", expireBefore, takeoverBefore, retries = fals
     if (stage === expireBefore) sqlite.prepare("UPDATE presentation_jobs SET leased_until=?").run(stamp());
     if (stage === takeoverBefore) sqlite.prepare("UPDATE presentation_jobs SET attempt_count=2,leased_until=datetime(?,'+60 minutes')").run(stamp());
     if (stage === "complete" && exhaustCompletion) {
-      assert.equal(options, null, "default completion options remain unchanged");
+      assert.deepEqual(options, {
+        retries: { limit: 5, delay: "10 seconds", backoff: "exponential" },
+        timeout: "10 minutes",
+      }, "completion options match the bounded retry simulation");
       for (let i = 0; i < 6; i++) {
         try { return await callback(); }
         catch (e) {
@@ -188,7 +191,7 @@ test("owned planner error renews again before actual fenced terminal completion"
   } finally { f.close(); }
 });
 
-test("six default completion failures then fenced failure recording fit the final finite horizon without repeating render/Judge", async () => {
+test("six bounded completion failures then fenced failure recording fit the final finite horizon without repeating render/Judge", async () => {
   const f = fixture({ oldAge: 16000, exhaustCompletion: true }); try {
     const result = await f.run(); assert.equal(result.status, "failed");
     assert.deepEqual(f.counters, { load: 1, plan: 0, execute: 1, judge: 1, complete: 7 });

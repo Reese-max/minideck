@@ -235,7 +235,7 @@ export async function assertOwnerScopedIdempotency() {
     "exportPresentation",
   ]) {
     const match = source.match(
-      new RegExp(`async function ${handler}\\([\\s\\S]*?\\n}\\n`),
+      new RegExp(`async function ${handler}\\([\\s\\S]*?\\r?\\n}\\r?\\n`),
     );
     assert.ok(match, `${handler} handler is present`);
     assert.match(match[0], /async \(\) => \{[\s\S]*?getProjectForOwner\(/);

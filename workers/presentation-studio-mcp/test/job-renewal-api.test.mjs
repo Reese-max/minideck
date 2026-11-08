@@ -55,7 +55,7 @@ test('actual API missing or wrong runner authentication rejects before every DB 
 });
 
 test('actual API malformed renewal request cannot touch SQLite',async()=>{
-  for(const body of [null,[],{}, {jobId:'not-a-job',attemptCount:1},{jobId:JOB,attemptCount:0},{jobId:JOB,attemptCount:1.5},{jobId:JOB,attemptCount:'1'}]){
+  for(const body of [null,[],{}, {jobId:'not-a-job',attemptCount:1},{jobId:JOB,attemptCount:0},{jobId:JOB,attemptCount:1.5},{jobId:JOB,attemptCount:'1'},{jobId:JOB,attemptCount:Number.MAX_SAFE_INTEGER+1},{jobId:JOB,attemptCount:Number.MAX_VALUE}]){
     const f=fixture();try{const before=state(f),result=await renew(f,{body});assert.equal(result.status,400);assert.equal(f.db.calls,0);assert.equal(state(f),before);}finally{f.sqlite.close();}
   }
 });

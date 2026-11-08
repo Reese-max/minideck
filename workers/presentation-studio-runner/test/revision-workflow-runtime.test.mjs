@@ -23,10 +23,10 @@ async function run(patch, { planner = false, scope = ["s1"] } = {}) {
   const spec = { slides: [{ id:"s1",keyMessage:"Original one" },{ id:"s2",keyMessage:"Original two" }] };
   const input = { type:"revision",jobId:"runtime-revision",projectId:"runtime-project",spec,sourceMap:{claims:[]},sources:[],profile:{},
     payload:planner?{instruction:"Synthetic targeted revision"}:{specPatch:patch}, changedSlides:scope, parentVersionId:"v1" };
-  const state = { input, renders:[],judges:0,completions:[],provider:0,
+  const state = { input, renders:[],judges:0,completions:[],provider:0,renewals:0,
     container:{async runJob(value) {state.renders.push(structuredClone(value)); return {status:"succeeded",jobId:value.jobId,
       version:{spec:value.spec,changedSlides:value.changedSlides,parentVersionId:value.parentVersionId,audit:{deterministic:{claimIntegrity:true}}}};}},
-    renew(job,seconds) {assert.equal(job.attemptCount,1); assert.ok([300,600,2100].includes(seconds));},
+    renew(job,seconds) {state.renewals++; assert.equal(job.attemptCount,1); assert.ok([300,600,2100].includes(seconds));},
     complete(result) {state.completions.push(structuredClone(result));return result;} };
   const original = globalThis.fetch;
   globalThis.__revisionRuntime = state;
@@ -37,6 +37,7 @@ async function run(patch, { planner = false, scope = ["s1"] } = {}) {
     const workflow = new PresentationWorkflow({},env);
     const step = {async do(_name,...args) {return args.at(-1)();}};
     const result = await workflow.run({payload:{job:{id:input.jobId,type:"revision",attemptCount:1}}},step);
+    assert.ok(state.renewals > 0, "Workflow renews before executing work");
     assert.deepEqual(input.spec,spec,"stored source fixture remains unchanged");
     return {state,result,spec};
   } finally {globalThis.fetch=original;delete globalThis.__revisionRuntime;}
