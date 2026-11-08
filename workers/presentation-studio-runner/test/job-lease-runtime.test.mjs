@@ -108,7 +108,7 @@ test("expired, replaced, terminal and malformed leases cannot be renewed or resu
   const [next] = await service.claimJobs(f.env, 1);
   assert.equal(next.id, job.id);
   assert.equal(next.attemptCount, 2);
-  await assert.rejects(service.renewJobLease(f.env, job), /job_lease_not_current/);
+  await assert.rejects(service.renewJob(f.env, job, 1), /job_lease_not_current/);
   assert.equal((await service.completeFailure(f.env, job, new Error("stale"))).error, "job_lease_not_current");
   assert.equal(f.row().attempt_count, 2);
   f.update("attempt_count = max_attempts, leased_until = datetime('now', '-1 minute')");
@@ -120,13 +120,13 @@ test("expired, replaced, terminal and malformed leases cannot be renewed or resu
 test("renewal has a finite horizon measured from the unchanged attempt start", async (t) => {
   const f = fixture(t);
   const [job] = await service.claimJobs(f.env, 1);
-  for (let i = 0; i < 7; i++) { f.advance(40); await service.renewJobLease(f.env, job); }
-  assert.equal(f.row().leased_until, "2099-01-01 05:17:00");
-  f.advance(37);
+  for (let i = 0; i < 8; i++) { f.advance(40); await service.renewJob(f.env, job, 1); }
+  assert.equal(f.row().leased_until, "2099-01-01 05:44:50");
+  f.advance(24 + 50 / 60);
   // The horizon also rejects a still-live lease, independently of lease expiry.
   f.update("leased_until = datetime('now', '+60 minutes')");
   const before = f.row();
-  await assert.rejects(service.renewJobLease(f.env, job), /job_lease_not_current/);
+  await assert.rejects(service.renewJob(f.env, job, 1), /job_lease_not_current/);
   assert.deepEqual(f.row(), before);
   assert.equal(f.row().attempt_count, 1);
   assert.equal(f.row().started_at, "2099-01-01 00:00:00");
@@ -198,7 +198,8 @@ for (const type of ["plan", "render", "revision", "export"]) {
 
 for (const expire of [false, true]) test(`Workflow stops before work when its attempt is ${expire ? "expired" : "taken over"}`, async (t) => {
   const f = await runWorkflow(t, "render", { rejectAt: 1, expire });
-  assert.match(f.error.message, /job_lease_not_current/);
+  assert.ifError(f.error);
+  assert.equal(f.result.error, "job_lease_not_current");
   assert.equal(f.events.includes("render"), false);
   assert.equal(f.events.some((e) => e.startsWith("complete:")), false);
   assert.equal(f.row().attempt_count, expire ? 1 : 2);

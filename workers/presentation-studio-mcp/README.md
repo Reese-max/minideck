@@ -48,13 +48,14 @@ must exactly match the version's slide set — a deck whose visual Judge saw onl
 a subset of slides cannot be approved.
 
 The runner-only endpoints are POST /internal/jobs/claim,
-POST /internal/jobs/renew, and POST /internal/jobs/complete. They require the PRESENTATION_RUNNER_TOKEN
-Bearer secret and are not registered as MCP tools. Claim leases expire after
-60 minutes. Each Workflow callback/retry renews the same unexpired attempt
-before work, up to 317 minutes from its original start (the bounded work and
-terminal-report retry budgets). Expired running jobs are recovered on claim;
-exhausted attempts are blocked with a diagnostic reason. Renewal and completion
-are attempt-fenced; completion accepts only constrained render/export result shapes.
+POST /internal/jobs/renew, and POST /internal/jobs/complete. They require the
+PRESENTATION_RUNNER_TOKEN Bearer secret and are not registered as MCP tools.
+Claim leases start at 60 minutes. Before each Workflow callback and retry,
+the runner renews only its current, unexpired attempt within finite attempt
+horizons; see [bounded lease renewal](../../docs/lease-renewal.md).
+Expired attempts are recovered on claim; exhausted attempts are blocked with a
+diagnostic reason. Renewal and completion are fenced to the current attempt.
+Completion accepts only constrained render/export result shapes.
 
 ## Local checks
 
